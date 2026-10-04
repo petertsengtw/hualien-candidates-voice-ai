@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>參選人 AI 對談</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1f1f1f; --muted: #6b6b6b;
+    --line: #e2e0da; --accent: #1d5c8f; --user: #e8eef4; --warn-bg: #fff4d6; --warn-text: #6b4e00; --err: #b3261e;
+    --speaking: #1f7a4d; --thinking: #8a6100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616; --panel: #202020; --text: #ececec; --muted: #a0a0a0;
+      --line: #333; --accent: #7fb3e0; --user: #26313b; --warn-bg: #3a3118; --warn-text: #f0d68a; --err: #f28b82;
+      --speaking: #6fd3a0; --thinking: #e8c26b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, "PingFang TC", "Noto Sans TC", sans-serif; }
+  .app { max-width: 1100px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; padding: 0 16px; }
+  header { padding: 16px 0 4px; }
+  .nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .nav a { font-size: .85rem; color: var(--text); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; }
+  .nav a[aria-current="page"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .nav a[aria-current="page"] { color: #111; } }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: .9rem; }
+  .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 8px 12px; font-size: .9rem; margin: 8px 0; }
+
+  .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 8px 0 12px; }
+  @media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .card.speaking { border-color: var(--speaking); box-shadow: 0 0 0 2px var(--speaking) inset; }
+  .card.disabled { opacity: .6; }
+  .card .head { display: flex; gap: 12px; align-items: center; }
+  .avatar { position: relative; flex: none; width: 56px; height: 56px; }
+  .avatar img, .avatar .initial { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
+  .avatar .initial { display: grid; place-items: center; background: var(--user); font-size: 1.3rem; font-weight: 600; }
+  .avatar .badge { position: absolute; right: -4px; bottom: -2px; background: var(--accent); color: #fff; font-size: .65rem; font-weight: 700; padding: 0 5px; border-radius: 999px; border: 2px solid var(--panel); }
+  @media (prefers-color-scheme: dark) { .avatar .badge { color: #111; } }
+  .card .name { font-weight: 700; }
+  .card .state { font-size: .85rem; color: var(--muted); min-height: 1.4em; }
+  .card .state.speaking { color: var(--speaking); font-weight: 600; }
+  .card .state.thinking { color: var(--thinking); }
+  .card .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  @media (prefers-color-scheme: dark) { button.primary { color: #111; } }
+  button.listening { background: var(--err); border-color: var(--err); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  select { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 5px 8px; }
+
+  #log { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 8px 0 16px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .who { font-size: .8rem; color: var(--muted); display: block; margin-bottom: 2px; }
+  .who img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 6px; }
+  .status { font-size: .85rem; color: var(--muted); margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .status.error { color: var(--err); }
+  .sources { margin: 8px 0 0; padding: 8px 0 0 20px; border-top: 1px dashed var(--line); font-size: .85rem; white-space: normal; }
+  .sources li { margin: 2px 0; }
+  .sources a { color: var(--accent); }
+  .sources .date { color: var(--muted); margin-left: 6px; }
+  .sources-title { font-size: .8rem; color: var(--muted); margin-top: 8px; }
+  .origin { font-size: .72rem; border-radius: 4px; padding: 0 5px; margin-right: 6px; border: 1px solid currentColor; }
+  .origin.official { color: var(--accent); }
+  .origin.media { color: var(--thinking, #8a6100); }
+  .origin.web { color: var(--muted); }
+  .sources details { margin: 2px 0 4px; color: var(--muted); }
+  .sources summary, details.sources-title summary { cursor: pointer; font-size: .8rem; }
+  .sources .quote { white-space: pre-wrap; font-size: .8rem; padding: 4px 0 0 8px; border-left: 2px solid var(--line); }
+
+  form { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); }
+  textarea { flex: 1 1 260px; font: inherit; resize: none; min-height: 44px; max-height: 160px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <nav class="nav" id="nav" aria-label="切換對談對象"></nav>
+    <h1>花蓮縣長參選人 AI 對談（實驗）</h1>
+    <div class="notice">以下是經授權的 AI 角色與合成聲音，回答不代表本人即時發言或立場。政策回答優先依據各自的官方政見，查不到才使用網路搜尋，請點開來源自行核對。</div>
+    <div class="notice" id="demoNotice" hidden></div>
+    <div class="notice" id="micNotice" hidden>使用麥克風時，語音在這台電腦上辨識成文字，不會送到外部的語音辨識服務，辨識完即刪除錄音。</div>
+  </header>
+
+  <section class="cards" id="cards" aria-label="參選人"></section>
+
+  <main id="log" aria-live="polite"></main>
+
+  <form id="form">
+    <label for="input" class="sub" style="position:absolute;left:-9999px">訊息</label>
+    <textarea id="input" rows="1" placeholder="輸入問題，Enter 送出，Shift+Enter 換行" required></textarea>
+    <div class="controls">
+      <label class="sub" for="target">問</label>
+      <select id="target"></select>
+      <button type="button" id="micAll" hidden>麥克風</button>
+      <label id="pauseWrap" class="sub" hidden style="white-space:nowrap">停頓
+        <select id="pauseMs">
+          <option value="1500">1.5 秒</option>
+          <option value="2500" selected>2.5 秒</option>
+          <option value="4000">4 秒</option>
+        </select>
+        算說完</label>
+      <label id="voiceStopWrap" class="sub" hidden style="white-space:nowrap" title="角色說話時直接開口即可打斷（用喇叭時若常被誤打斷，請戴耳機或取消勾選）"><input type="checkbox" id="voiceStop" checked> 開口即打斷</label>
+      <button type="button" id="stop" disabled>停止</button>
+      <button type="submit" class="primary" id="send">送出</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let chars = []; // 畫面上的角色（依顯示順序）
+const transcript = []; // 共同對話紀錄：{ role: 'user', text } 或 { role: 'assistant', characterId, text }
+let turnId = 0; // 每次新提問或停止都會遞增，讓舊的回答流程自行結束
+let audio = null;
+let playback = 0;
+let speakingId = null;
+let sttReady = false;
+
+const ALL = 'all';
+const byId = (id) => chars.find((c) => c.id === id);
+const activeChars = () => chars.filter((c) => c.enabled);
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function avatarEl(c, cls = '') {
+  const wrap = document.createElement('div');
+  wrap.className = 'avatar ' + cls;
+  const face = document.createElement(c.avatarUrl ? 'img' : 'div');
+  if (c.avatarUrl) {
+    face.src = c.avatarUrl;
+    face.alt = `${c.name}照片（AI 角色使用）`;
+  } else {
+    face.className = 'initial';
+    face.textContent = c.name.slice(0, 1);
+  }
+  const badge = document.createElement('span');
+  badge.className = 'badge';
+  badge.textContent = 'AI';
+  wrap.append(face, badge);
+  return wrap;
+}
+
+// ── 角色卡片 ──
+function renderCards() {
+  const box = $('cards');
+  box.replaceChildren();
+  for (const c of chars) {
+    const card = document.createElement('article');
+    card.className = 'card' + (c.enabled ? '' : ' disabled');
+    card.id = `card-${c.id}`;
+    const head = document.createElement('div');
+    head.className = 'head';
+    const info = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = `${c.name}（AI 角色）`;
+    const title = document.createElement('div');
+    title.className = 'sub';
+    title.textContent = c.title + (c.knowledge?.length ? `｜政見資料：${c.knowledge.map((d) => d.title).join('、')}` : '');
+    info.append(name, title);
+    head.append(avatarEl(c), info);
+    const state = document.createElement('div');
+    state.className = 'state';
+    state.id = `state-${c.id}`;
+    state.textContent = c.enabled ? '待命' : `未啟用：${c.disabledReason}`;
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const mic = document.createElement('button');
+    mic.type = 'button';
+    mic.id = `mic-${c.id}`;
+    mic.textContent = '對他說';
+    mic.disabled = !c.enabled || !sttReady;
+    mic.title = sttReady ? `按下後用麥克風問${c.name}` : '語音辨識尚未就緒';
+    mic.addEventListener('click', () => toggleListening([c.id], mic));
+    const respond = document.createElement('button');
+    respond.type = 'button';
+    respond.id = `respond-${c.id}`;
+    respond.textContent = '請他回應';
+    respond.title = `請${c.name}回應其他人剛才的說法`;
+    respond.disabled = true;
+    respond.addEventListener('click', () => ask(`請${c.name}回應剛才其他人的說法。`, [c.id]));
+    actions.append(mic, respond);
+    card.append(head, state, actions);
+    box.append(card);
+  }
+}
+
+function setState(id, text, kind = '') {
+  const el = $(`state-${id}`);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'state ' + kind;
+  $(`card-${id}`)?.classList.toggle('speaking', kind === 'speaking');
+}
+
+function resetStates() {
+  for (const c of activeChars()) setState(c.id, '待命');
+}
+
+// 有別人發言過，才能請某人回應
+function updateRespondButtons() {
+  for (const c of activeChars()) {
+    const othersSpoke = transcript.some((t) => t.role === 'assistant' && t.characterId !== c.id);
+    $(`respond-${c.id}`).disabled = !othersSpoke;
+  }
+}
+
+function renderTargets() {
+  const sel = $('target');
+  sel.replaceChildren();
+  const all = new Option('全體（依序回答）', ALL);
+  sel.append(all);
+  for (const c of activeChars()) sel.append(new Option(c.name, c.id));
+  if (activeChars().length < 2) sel.value = activeChars()[0]?.id || ALL;
+}
+
+function targetIds(value) {
+  return value === ALL ? activeChars().map((c) => c.id) : [value];
+}
+
+// ── 對話紀錄 ──
+function addMessage(c, text, label) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + (c ? 'assistant' : 'user');
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = label || (c ? `${c.name}（AI）` : '你');
+  if (c?.avatarUrl) {
+    const img = document.createElement('img');
+    img.src = c.avatarUrl;
+    img.alt = '';
+    who.prepend(img);
+  }
+  const body = document.createElement('div');
+  body.textContent = text;
+  const status = document.createElement('div');
+  status.className = 'status';
+  el.append(who, body, status);
+  $('log').append(el);
+  el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  return { el, body, status };
+}
+
+function setStatus(status, text, isError = false, actions = []) {
+  status.className = 'status' + (isError ? ' error' : '');
+  status.replaceChildren(document.createTextNode(text), ...actions);
+}
+
+function actionBtn(label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.onclick = onClick;
+  return b;
+}
+
+// 回答引用的來源：標示「官網政見」或「網路」；回答未引用時收合搜尋過的網頁
+const ORIGIN_LABELS = { official: '官網政見', media: '媒體報導整理' };
+function renderSources(msg, sources) {
+  if (!sources || !Array.isArray(sources.items) || !sources.items.length) return;
+  const list = document.createElement('ol');
+  list.className = 'sources';
+  if (sources.kind !== 'cited') {
+    const box = document.createElement('details');
+    box.className = 'sources-title';
+    const summary = document.createElement('summary');
+    summary.textContent = `查詢過的網頁 ${sources.items.length} 筆（回答未引用）`;
+    box.append(summary, list);
+    msg.body.after(box);
+  } else {
+    const title = document.createElement('div');
+    title.className = 'sources-title';
+    title.textContent = '資料來源（回答中引用）：';
+    msg.body.after(title, list);
+  }
+  for (const s of sources.items) {
+    const li = document.createElement('li');
+    const tag = document.createElement('span');
+    tag.className = 'origin ' + (ORIGIN_LABELS[s.origin] ? s.origin : 'web');
+    tag.textContent = ORIGIN_LABELS[s.origin] || '網路';
+    const a = document.createElement(s.url ? 'a' : 'span');
+    if (s.url) {
+      a.href = s.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    }
+    a.textContent = s.title;
+    li.append(tag, a);
+    if (s.origin !== 'web' && s.quote) {
+      const q = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = '引用原文';
+      const body = document.createElement('div');
+      body.className = 'quote';
+      body.textContent = s.quote;
+      q.append(summary, body);
+      li.append(q);
+    }
+    if (s.date) {
+      const d = document.createElement('span');
+      d.className = 'date';
+      d.textContent = s.date;
+      li.append(d);
+    }
+    list.append(li);
+  }
+}
+
+// ── 播放（一次只播一位）──
+function stopAudio() {
+  playback++;
+  stopMonitor();
+  if (audio) { audio.pause(); audio = null; }
+  $('stop').disabled = true;
+}
+
+function playOne(src) {
+  const a = new Audio(src);
+  audio = a;
+  return new Promise((resolve) => {
+    a.onended = () => resolve('ended');
+    a.onpause = () => { if (!a.ended) resolve('stopped'); };
+    a.play().catch(() => resolve('blocked'));
+  });
+}
+
+function splitForSpeech(text) {
+  const parts = text.split(/(?<=[。！？!?；;\n])/).map((s) => s.trim()).filter(Boolean);
+  const chunks = [];
+  for (const p of parts) {
+    const last = chunks[chunks.length - 1];
+    const minLength = chunks.length > 1 ? 40 : 12;
+    if (last !== undefined && last.length < minLength) chunks[chunks.length - 1] = last + p;
+    else chunks.push(p);
+  }
+  return chunks.length ? chunks : [text];
+}
+
+function ttsLoader(text, characterId) {
+  let pending = null;
+  return () => {
+    pending ??= api('/api/tts', { text, characterId })
+      .then(({ audio: b64, mime }) => `data:${mime};base64,${b64}`)
+      .catch((err) => { pending = null; throw err; });
+    return pending;
+  };
+}
+
+// 依序播放一位角色的回答；回傳 'ended' / 'stopped' / 'blocked' / 'failed'
+async function playSequence(c, loaders, status) {
+  stopAudio();
+  const token = playback;
+  const replay = (label = '重播') => actionBtn(label, () => playSequence(c, loaders, status));
+  $('stop').disabled = false;
+  speakingId = c.id;
+  let next = loaders[0]();
+  try {
+    for (let i = 0; i < loaders.length; i++) {
+      let src;
+      try {
+        src = await next;
+      } catch (err) {
+        if (token === playback) setStatus(status, `語音失敗：${err.message}`, true, [replay('重試語音')]);
+        return 'failed';
+      }
+      if (token !== playback) { setStatus(status, '已停止', false, [replay()]); return 'stopped'; }
+      if (i + 1 < loaders.length) next = loaders[i + 1]();
+      const playing = playOne(src);
+      if (i === 0) {
+        setStatus(status, '播放中（合成聲音）');
+        setState(c.id, '說話中…', 'speaking');
+        startMonitor();
+      }
+      const result = await playing;
+      if (result === 'blocked') {
+        setStatus(status, '瀏覽器未允許自動播放', false, [replay('播放')]);
+        return 'blocked';
+      }
+      if (result === 'stopped' || token !== playback) { setStatus(status, '已停止', false, [replay()]); return 'stopped'; }
+    }
+    setStatus(status, '已播放', false, [replay()]);
+    return 'ended';
+  } finally {
+    if (token === playback) {
+      stopMonitor();
+      audio = null;
+      $('stop').disabled = true;
+    }
+    if (speakingId === c.id) speakingId = null;
+    setState(c.id, '待命');
+  }
+}
+
+async function speakAs(c, text, status) {
+  if (!c.voiceEnabled) {
+    setStatus(status, '未設定聲音，只顯示文字');
+    return 'ended';
+  }
+  setStatus(status, '產生語音中…');
+  return playSequence(c, splitForSpeech(text).map((t) => ttsLoader(t, c.id)), status);
+}
+
+// ── 提問：被問的人依序回答；下一位在前一位說話時就開始準備（看得到前一位的發言）──
+async function ask(text, ids) {
+  const targets = ids.map(byId).filter((c) => c?.enabled);
+  if (!targets.length) return;
+  const myTurn = ++turnId;
+  stopAudio();
+  resetStates();
+  transcript.push({ role: 'user', text });
+  addMessage(null, text, `你 → ${targets.length > 1 ? '全體' : targets[0].name}`);
+  for (const c of targets) setState(c.id, '排隊中', 'thinking');
+
+  let previous = null; // 前一位的播放
+  for (const c of targets) {
+    if (myTurn !== turnId) return;
+    setState(c.id, '思考中…', 'thinking');
+    const msg = addMessage(c, '');
+    setStatus(msg.status, '思考中（可能需要查資料）…');
+    let reply;
+    try {
+      reply = await api('/api/chat', { characterId: c.id, transcript: transcript.slice() });
+    } catch (err) {
+      if (myTurn !== turnId) return;
+      setStatus(msg.status, `回答失敗：${err.message}`, true);
+      setState(c.id, '回答失敗');
+      continue;
+    }
+    if (myTurn !== turnId) { msg.el.remove(); return; }
+    transcript.push({ role: 'assistant', characterId: c.id, text: reply.text });
+    msg.body.textContent = reply.text;
+    renderSources(msg, reply.sources);
+    updateRespondButtons();
+    setState(c.id, '等前一位說完', 'thinking');
+    setStatus(msg.status, '等前一位說完…');
+    if (previous) {
+      const result = await previous;
+      if (result === 'stopped' || myTurn !== turnId) return;
+    }
+    if (myTurn !== turnId) return;
+    previous = speakAs(c, reply.text, msg.status);
+  }
+  if (previous) await previous;
+}
+
+function stopAll() {
+  turnId++;
+  stopAudio();
+  resetStates();
+}
+
+$('form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = $('input').value.trim();
+  if (!text) return;
+  $('input').value = '';
+  ask(text, targetIds($('target').value));
+});
+$('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('form').requestSubmit(); }
+});
+$('stop').addEventListener('click', stopAll);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') stopAll(); });
+
+// ── 麥克風：瀏覽器只錄音，語音辨識在本機伺服器進行 ──
+const canRecord = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+let mic = null;
+let listening = null;
+let monitorTimer = null;
+
+function pauseMs() {
+  return Number($('pauseMs').value) || 2500;
+}
+
+async function ensureMic() {
+  if (mic) return mic;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  mic = { stream, ctx, analyser, buf: new Float32Array(analyser.fftSize), noise: 0.01 };
+  return mic;
+}
+
+function micLevel() {
+  mic.analyser.getFloatTimeDomainData(mic.buf);
+  let sum = 0;
+  for (const v of mic.buf) sum += v * v;
+  return Math.sqrt(sum / mic.buf.length);
+}
+
+function speechThreshold(factor = 3, floor = 0.02) {
+  return Math.max(floor, mic.noise * factor);
+}
+
+function setMicButton(btn, state) {
+  if (!btn) return;
+  const idle = btn.dataset.label || btn.textContent;
+  btn.dataset.label = idle;
+  btn.textContent = { idle, listening: '聆聽中…（按此結束）', busy: '辨識中…' }[state];
+  btn.classList.toggle('listening', state === 'listening');
+  btn.disabled = state === 'busy';
+}
+
+function hint(message) {
+  const original = '輸入問題，Enter 送出，Shift+Enter 換行';
+  $('input').placeholder = message;
+  setTimeout(() => { $('input').placeholder = original; }, 4000);
+}
+
+function toggleListening(ids, btn) {
+  if (listening) return listening.finish();
+  startListening(ids, btn);
+}
+
+async function startListening(ids, btn, alreadySpeaking = false) {
+  if (!sttReady || listening) return;
+  stopAll(); // 開口時先停止所有角色
+  try {
+    await ensureMic();
+    if (mic.ctx.state === 'suspended') await mic.ctx.resume();
+  } catch {
+    alert('無法使用麥克風：請在瀏覽器網址列允許此網站使用麥克風。');
+    return;
+  }
+  const recorder = new MediaRecorder(mic.stream);
+  const chunks = [];
+  const started = performance.now();
+  let spoke = alreadySpeaking;
+  let lastVoice = started;
+  let timer = null;
+  const job = {
+    finish() {
+      clearInterval(timer);
+      if (recorder.state !== 'inactive') recorder.stop();
+    },
+  };
+  listening = job;
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    listening = null;
+    setMicButton(btn, 'idle');
+    if (spoke) recognize(new Blob(chunks, { type: recorder.mimeType }), ids, btn);
+  };
+  timer = setInterval(() => {
+    const now = performance.now();
+    const lvl = micLevel();
+    if (lvl > speechThreshold()) {
+      spoke = true;
+      lastVoice = now;
+    } else if (!spoke) {
+      mic.noise = mic.noise * 0.95 + lvl * 0.05;
+    }
+    if (spoke && now - lastVoice > pauseMs()) job.finish();
+    else if (!spoke && now - started > 8000) job.finish();
+    else if (now - started > 60000) job.finish();
+  }, 50);
+  recorder.start(250);
+  setMicButton(btn, 'listening');
+}
+
+async function recognize(blob, ids, btn) {
+  setMicButton(btn, 'busy');
+  try {
+    const res = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const text = (data.text || '').trim();
+    if (!text) return hint('沒有聽清楚，請再說一次');
+    ask(text, ids);
+  } catch (err) {
+    hint(`語音辨識失敗：${err.message}`);
+  } finally {
+    setMicButton(btn, 'idle');
+  }
+}
+
+// 角色說話時偵測使用者開口：打斷後錄下新問題，交給剛才說話的角色回答
+function startMonitor() {
+  stopMonitor();
+  if (!mic || !sttReady || !$('voiceStop').checked || listening) return;
+  let loudTicks = 0;
+  monitorTimer = setInterval(() => {
+    loudTicks = micLevel() > speechThreshold(6, 0.04) ? loudTicks + 1 : 0;
+    if (loudTicks >= 6) {
+      const id = speakingId;
+      stopMonitor();
+      startListening(id ? [id] : targetIds($('target').value), id ? $(`mic-${id}`) : $('micAll'), true);
+    }
+  }, 50);
+}
+
+function stopMonitor() {
+  clearInterval(monitorTimer);
+  monitorTimer = null;
+}
+
+$('micAll').addEventListener('click', () => toggleListening(targetIds($('target').value), $('micAll')));
+
+function enableMic() {
+  for (const id of ['micAll', 'pauseWrap', 'voiceStopWrap', 'micNotice']) $(id).hidden = false;
+  for (const c of activeChars()) {
+    const b = $(`mic-${c.id}`);
+    b.disabled = false;
+    b.title = `按下後用麥克風問${c.name}`;
+  }
+}
+
+async function checkStt(attempt = 0) {
+  if (!canRecord) return;
+  try {
+    sttReady = (await api('/api/config')).sttReady;
+  } catch {
+    sttReady = false;
+  }
+  if (sttReady) return enableMic();
+  if (attempt < 40) setTimeout(() => checkStt(attempt + 1), 3000);
+}
+
+try {
+  const saved = localStorage.getItem('pauseMs');
+  if (saved && [...$('pauseMs').options].some((o) => o.value === saved)) $('pauseMs').value = saved;
+} catch { /* 沿用預設值 */ }
+$('pauseMs').addEventListener('change', () => {
+  try { localStorage.setItem('pauseMs', $('pauseMs').value); } catch { /* 忽略 */ }
+});
+
+// ── 載入角色 ──
+api('/api/config').then((cfg) => {
+  const candidates = cfg.characters.filter((c) => c.kind === 'candidate');
+  const demos = cfg.characters.filter((c) => c.kind === 'demo');
+  // 測試模式：未授權的參選人位置改由虛構測試角色代替
+  chars = cfg.demoCharacters
+    ? candidates.map((c) => (c.enabled ? c : demos.shift() || c))
+    : candidates;
+  const replaced = candidates.filter((c) => !c.enabled && !chars.includes(c));
+  if (replaced.length) {
+    $('demoNotice').textContent = `${replaced.map((c) => c.name).join('、')}尚未取得授權，未開放成 AI 角色。測試模式以虛構角色代替，虛構角色不代表任何真實人物。`;
+    $('demoNotice').hidden = false;
+  }
+  for (const c of candidates.filter((x) => x.enabled)) {
+    const a = document.createElement('a');
+    a.href = `/?c=${encodeURIComponent(c.id)}`;
+    a.textContent = c.name;
+    $('nav').append(a);
+  }
+  const here = document.createElement('a');
+  here.href = '/panel.html';
+  here.textContent = '多人對談';
+  here.setAttribute('aria-current', 'page');
+  $('nav').append(here);
+  sttReady = cfg.sttReady;
+  renderCards();
+  renderTargets();
+  if (sttReady) enableMic();
+  else checkStt();
+});
+</script>
+</body>
+</html>

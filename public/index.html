@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 語音對談</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1f1f1f; --muted: #6b6b6b;
+    --line: #e2e0da; --accent: #1d5c8f; --user: #e8eef4; --warn-bg: #fff4d6; --warn-text: #6b4e00; --err: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616; --panel: #202020; --text: #ececec; --muted: #a0a0a0;
+      --line: #333; --accent: #7fb3e0; --user: #26313b; --warn-bg: #3a3118; --warn-text: #f0d68a; --err: #f28b82;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, "PingFang TC", "Noto Sans TC", sans-serif; }
+  .app { max-width: 760px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; padding: 0 16px; }
+  header { padding: 16px 0 8px; }
+  .nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .nav a { font-size: .85rem; color: var(--text); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; }
+  .nav a[aria-current="page"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { .nav a[aria-current="page"] { color: #111; } }
+  .profile { display: flex; gap: 14px; align-items: center; }
+  .avatar { position: relative; flex: none; width: 72px; height: 72px; }
+  .avatar img, .avatar .initial { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
+  .avatar .initial { display: grid; place-items: center; background: var(--user); font-size: 1.6rem; font-weight: 600; }
+  .avatar .badge { position: absolute; right: -4px; bottom: -2px; background: var(--accent); color: #fff; font-size: .7rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; border: 2px solid var(--bg); }
+  @media (prefers-color-scheme: dark) { .avatar .badge { color: #111; } }
+  .sources { margin: 8px 0 0; padding: 8px 0 0 20px; border-top: 1px dashed var(--line); font-size: .85rem; white-space: normal; }
+  .sources li { margin: 2px 0; }
+  .sources a { color: var(--accent); }
+  .sources .date { color: var(--muted); margin-left: 6px; }
+  .sources-title { font-size: .8rem; color: var(--muted); margin-top: 8px; }
+  .origin { font-size: .72rem; border-radius: 4px; padding: 0 5px; margin-right: 6px; border: 1px solid currentColor; }
+  .origin.official { color: var(--accent); }
+  .origin.media { color: var(--thinking, #8a6100); }
+  .origin.web { color: var(--muted); }
+  .sources details { margin: 2px 0 4px; color: var(--muted); }
+  .sources summary { cursor: pointer; font-size: .8rem; }
+  .sources .quote { white-space: pre-wrap; font-size: .8rem; padding: 4px 0 0 8px; border-left: 2px solid var(--line); }
+  .who img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 6px; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  .sub { color: var(--muted); font-size: .9rem; }
+  .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 8px 12px; font-size: .9rem; margin: 8px 0; }
+  #log { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 8px 0 16px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .who { font-size: .8rem; color: var(--muted); display: block; margin-bottom: 2px; }
+  .status { font-size: .85rem; color: var(--muted); margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .status.error { color: var(--err); }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  @media (prefers-color-scheme: dark) { button.primary { color: #111; } }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  form { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); }
+  button.listening { background: var(--err); border-color: var(--err); color: #fff; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  textarea { flex: 1 1 240px; font: inherit; resize: none; min-height: 44px; max-height: 160px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <nav class="nav" id="nav" aria-label="切換對談對象"></nav>
+    <div class="profile">
+      <div class="avatar" id="avatar" hidden><span class="badge">AI</span></div>
+      <div>
+        <h1 id="name">AI 角色</h1>
+        <div class="sub" id="desc"></div>
+      </div>
+    </div>
+    <div class="notice">這是經授權的 AI 角色與合成聲音，回答不代表本人即時發言或立場。政策相關回答優先依據官方政見，查不到才使用網路搜尋（可能包含媒體轉述或錯誤），請點開下方來源自行核對。</div>
+    <div class="notice" id="setupWarn" hidden></div>
+    <div class="notice" id="micNotice" hidden>使用麥克風時，你的語音在這台電腦上辨識成文字，不會送到外部的語音辨識服務，辨識完即刪除錄音。</div>
+  </header>
+
+  <main id="log" aria-live="polite"></main>
+
+  <form id="form">
+    <label for="input" class="sub" style="position:absolute;left:-9999px">訊息</label>
+    <textarea id="input" rows="1" placeholder="輸入訊息，Enter 送出，Shift+Enter 換行" required></textarea>
+    <div class="controls">
+      <button type="button" id="mic" hidden aria-pressed="false">麥克風</button>
+      <label id="handsFreeWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="handsFree"> 連續對談</label>
+      <label id="pauseWrap" class="sub" hidden style="white-space:nowrap">停頓
+        <select id="pauseMs">
+          <option value="1500">1.5 秒</option>
+          <option value="2500" selected>2.5 秒</option>
+          <option value="4000">4 秒</option>
+        </select>
+        算說完</label>
+      <label id="confirmVoiceWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="confirmVoice"> 送出前確認</label>
+      <label id="voiceStopWrap" class="sub" hidden style="white-space:nowrap" title="角色說話時直接開口即可打斷（用喇叭時若常被誤打斷，請戴耳機或取消勾選）"><input type="checkbox" id="voiceStop" checked> 開口即打斷</label>
+      <label id="testModeWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="testMode"> 朗讀測試</label>
+      <button type="button" id="stop" disabled>停止</button>
+      <button type="submit" class="primary" id="send">送出</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const chatHistory = [];
+let character = { name: 'AI 角色' };
+let characterId = null;
+let voiceEnabled = false;
+
+// 頁首導覽：每位已啟用參選人的單人頁，以及多人對談頁
+function renderNav(candidates) {
+  const nav = $('nav');
+  for (const c of candidates.filter((x) => x.enabled)) {
+    const a = document.createElement('a');
+    a.href = `/?c=${encodeURIComponent(c.id)}`;
+    a.textContent = c.name;
+    if (c.id === characterId) a.setAttribute('aria-current', 'page');
+    nav.append(a);
+  }
+  const panel = document.createElement('a');
+  panel.href = '/panel.html';
+  panel.textContent = '多人對談';
+  nav.append(panel);
+}
+let turnId = 0;
+let audio = null;
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function addMessage(role, text, label) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = label || (role === 'user' ? '你' : `${character.name}（AI）`);
+  if (role === 'assistant' && character.avatarUrl) {
+    const img = document.createElement('img');
+    img.src = character.avatarUrl;
+    img.alt = '';
+    who.prepend(img);
+  }
+  const body = document.createElement('div');
+  body.textContent = text;
+  const status = document.createElement('div');
+  status.className = 'status';
+  el.append(who, body, status);
+  $('log').append(el);
+  el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  return { el, body, status };
+}
+
+function setStatus(status, text, isError = false, actions = []) {
+  status.className = 'status' + (isError ? ' error' : '');
+  status.replaceChildren(document.createTextNode(text), ...actions);
+}
+
+// 每次停止或開始新的播放都會遞增，用來讓舊的播放序列自行結束
+let playback = 0;
+
+function stopAudio() {
+  playback++;
+  stopMonitor();
+  if (audio) { audio.pause(); audio = null; }
+  $('stop').disabled = true;
+}
+
+// 播放單段音訊，回傳 'ended'（播完）、'stopped'（被停止）或 'blocked'（瀏覽器不允許自動播放）
+function playOne(src) {
+  const a = new Audio(src);
+  audio = a;
+  return new Promise((resolve) => {
+    a.onended = () => resolve('ended');
+    a.onpause = () => { if (!a.ended) resolve('stopped'); };
+    a.play().catch(() => resolve('blocked'));
+  });
+}
+
+// 把回答切成句子分段合成：第一段較短，先合成先播；播放時同步合成下一段，縮短等待
+function splitForSpeech(text) {
+  const parts = text.split(/(?<=[。！？!?；;\n])/).map((s) => s.trim()).filter(Boolean);
+  const chunks = [];
+  for (const p of parts) {
+    const last = chunks[chunks.length - 1];
+    const minLength = chunks.length > 1 ? 40 : 12;
+    if (last !== undefined && last.length < minLength) chunks[chunks.length - 1] = last + p;
+    else chunks.push(p);
+  }
+  return chunks.length ? chunks : [text];
+}
+
+// 同一段只合成一次；失敗時清掉快取，讓「重試」可以重新合成
+function ttsLoader(text) {
+  let pending = null;
+  return () => {
+    pending ??= api('/api/tts', { text, characterId })
+      .then(({ audio: b64, mime }) => `data:${mime};base64,${b64}`)
+      .catch((err) => { pending = null; throw err; });
+    return pending;
+  };
+}
+
+function actionBtn(label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.onclick = onClick;
+  return b;
+}
+
+async function playSequence(loaders, status) {
+  stopAudio();
+  const token = playback;
+  const replay = (label = '重播') => actionBtn(label, () => playSequence(loaders, status));
+  $('stop').disabled = false;
+  let next = loaders[0]();
+  for (let i = 0; i < loaders.length; i++) {
+    let src;
+    try {
+      src = await next;
+    } catch (err) {
+      if (token !== playback) return;
+      $('stop').disabled = true;
+      return setStatus(status, `語音失敗：${err.message}`, true, [replay('重試語音')]);
+    }
+    if (token !== playback) return setStatus(status, i === 0 ? '已取消' : '已停止', false, [replay()]);
+    if (i + 1 < loaders.length) next = loaders[i + 1](); // 播放這段時先合成下一段
+    const playing = playOne(src);
+    if (i === 0) {
+      setStatus(status, '播放中（合成聲音）');
+      startMonitor();
+    }
+    const result = await playing;
+    if (result === 'blocked') {
+      stopMonitor();
+      $('stop').disabled = true;
+      return setStatus(status, '瀏覽器未允許自動播放', false, [replay('播放')]);
+    }
+    if (result === 'stopped' || token !== playback) {
+      if (token === playback) stopMonitor();
+      return setStatus(status, '已停止', false, [replay()]);
+    }
+  }
+  stopMonitor();
+  audio = null;
+  $('stop').disabled = true;
+  setStatus(status, '已播放', false, [replay()]);
+  if ($('handsFree').checked) startListening(); // 連續對談：唸完後自動開始聆聽
+}
+
+async function speak(text, status, myTurn) {
+  if (myTurn !== turnId) return;
+  setStatus(status, '產生語音中…');
+  await playSequence(splitForSpeech(text).map(ttsLoader), status);
+}
+
+// 回答引用的來源：標示「官網政見」或「網路」，標題連結 + 日期；官網政見另外列出引用的原文
+const ORIGIN_LABELS = { official: '官網政見', media: '媒體報導整理' };
+function renderSources(msg, sources) {
+  if (!sources || !Array.isArray(sources.items) || !sources.items.length) return;
+  const list = document.createElement('ol');
+  list.className = 'sources';
+  if (sources.kind !== 'cited') {
+    // 回答沒有引用任何來源（例如查不到資料），搜尋過的網頁收合起來，避免被誤以為是答案依據
+    const box = document.createElement('details');
+    box.className = 'sources-title';
+    const summary = document.createElement('summary');
+    summary.textContent = `查詢過的網頁 ${sources.items.length} 筆（回答未引用）`;
+    box.append(summary, list);
+    msg.body.after(box);
+  } else {
+    const title = document.createElement('div');
+    title.className = 'sources-title';
+    title.textContent = '資料來源（回答中引用）：';
+    msg.body.after(title, list);
+  }
+  for (const s of sources.items) {
+    const li = document.createElement('li');
+    const tag = document.createElement('span');
+    tag.className = 'origin ' + (ORIGIN_LABELS[s.origin] ? s.origin : 'web');
+    tag.textContent = ORIGIN_LABELS[s.origin] || '網路';
+    const a = document.createElement(s.url ? 'a' : 'span');
+    if (s.url) {
+      a.href = s.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    }
+    a.textContent = s.title;
+    if (s.quote && s.origin !== 'official') a.title = s.quote;
+    li.append(tag, a);
+    if (s.origin !== 'web' && s.quote) {
+      const q = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = '引用原文';
+      const body = document.createElement('div');
+      body.className = 'quote';
+      body.textContent = s.quote;
+      q.append(summary, body);
+      li.append(q);
+    }
+    if (s.date) {
+      const d = document.createElement('span');
+      d.className = 'date';
+      d.textContent = s.date;
+      li.append(d);
+    }
+    list.append(li);
+  }
+}
+
+// 朗讀測試：輸入文字直接以角色聲音朗讀，不經 LLM，也不寫入對話上下文。
+async function readAloud(text) {
+  const myTurn = ++turnId;
+  stopAudio();
+  const msg = addMessage('assistant', text, `${character.name}（合成聲音朗讀測試，非 AI 回答）`);
+  await speak(text, msg.status, myTurn);
+}
+
+// 還在等回答的問題；使用者隨時可以提出新問題，舊的會被中斷
+let pending = null;
+
+async function submit(text) {
+  if ($('testMode').checked) return readAloud(text);
+  const myTurn = ++turnId;
+  stopAudio();
+  if (pending) {
+    // 被中斷的問題沒有回答，從對話紀錄移除，避免模型同時回答兩題
+    chatHistory.splice(chatHistory.indexOf(pending.question), 1);
+    setStatus(pending.reply.status, '已中斷（改回答新問題）');
+  }
+  const question = { role: 'user', content: text };
+  chatHistory.push(question);
+  addMessage('user', text);
+  const reply = addMessage('assistant', '');
+  pending = { question, reply };
+  setStatus(reply.status, '思考中（可能需要上網搜尋）…');
+  try {
+    const { text: answer, sources } = await api('/api/chat', { characterId, messages: chatHistory.slice() });
+    if (myTurn !== turnId) return; // 已被新問題中斷，結果不採用
+    pending = null;
+    chatHistory.push({ role: 'assistant', content: answer });
+    reply.body.textContent = answer;
+    renderSources(reply, sources);
+    if (voiceEnabled) await speak(answer, reply.status, myTurn);
+    else setStatus(reply.status, '未設定聲音，只顯示文字');
+  } catch (err) {
+    if (myTurn !== turnId) return;
+    pending = null;
+    chatHistory.splice(chatHistory.indexOf(question), 1);
+    setStatus(reply.status, `回答失敗：${err.message}`, true);
+  }
+}
+
+$('form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = $('input').value.trim();
+  if (!text) return;
+  $('input').value = '';
+  submit(text);
+});
+$('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('form').requestSubmit(); }
+});
+$('stop').addEventListener('click', stopAudio);
+// 按 Esc 也可以停止播放
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && audio) stopAudio(); });
+
+// 麥克風輸入：瀏覽器只負責錄音，語音辨識由本機伺服器上的 Whisper 進行，所有瀏覽器都能用。
+const canRecord = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+let sttReady = false;
+let mic = null; // 麥克風串流與音量分析器，第一次使用時建立，之後重複使用
+let listening = null; // 進行中的錄音
+let monitorTimer = null; // 角色說話時偵測使用者開口
+
+// 停頓多久才算說完（毫秒）
+function pauseMs() {
+  return Number($('pauseMs').value) || 2500;
+}
+
+async function ensureMic() {
+  if (mic) return mic;
+  // 開啟回音消除，減少錄到喇叭播放的角色聲音
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  mic = { stream, ctx, analyser, buf: new Float32Array(analyser.fftSize), noise: 0.01 };
+  return mic;
+}
+
+// 目前麥克風音量（RMS）
+function micLevel() {
+  mic.analyser.getFloatTimeDomainData(mic.buf);
+  let sum = 0;
+  for (const v of mic.buf) sum += v * v;
+  return Math.sqrt(sum / mic.buf.length);
+}
+
+// 說話門檻：環境噪音的數倍，且不低於固定下限
+function speechThreshold(factor = 3, floor = 0.02) {
+  return Math.max(floor, mic.noise * factor);
+}
+
+function updateMic(state) {
+  const labels = { idle: '麥克風', listening: '聆聽中…（按此結束）', busy: '辨識中…' };
+  $('mic').textContent = labels[state];
+  $('mic').classList.toggle('listening', state === 'listening');
+  $('mic').setAttribute('aria-pressed', String(state === 'listening'));
+  $('mic').disabled = state === 'busy';
+}
+
+function hint(message) {
+  const original = '輸入訊息，Enter 送出，Shift+Enter 換行';
+  $('input').placeholder = message;
+  setTimeout(() => { $('input').placeholder = original; }, 4000);
+}
+
+async function startListening(alreadySpeaking = false) {
+  if (!sttReady || listening) return;
+  stopAudio(); // 說話時先停止角色的語音
+  try {
+    await ensureMic();
+    if (mic.ctx.state === 'suspended') await mic.ctx.resume();
+  } catch {
+    $('handsFree').checked = false;
+    alert('無法使用麥克風：請在瀏覽器網址列允許此網站使用麥克風。');
+    return;
+  }
+  const recorder = new MediaRecorder(mic.stream);
+  const chunks = [];
+  const started = performance.now();
+  let spoke = alreadySpeaking;
+  let lastVoice = started;
+  let timer = null;
+  const job = {
+    finish() {
+      clearInterval(timer);
+      if (recorder.state !== 'inactive') recorder.stop();
+    },
+  };
+  listening = job;
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    listening = null;
+    updateMic('idle');
+    if (spoke) recognize(new Blob(chunks, { type: recorder.mimeType }));
+  };
+  // 每 50 毫秒看一次音量：有聲音就重新計時，安靜超過設定秒數就結束錄音
+  timer = setInterval(() => {
+    const now = performance.now();
+    const lvl = micLevel();
+    if (lvl > speechThreshold()) {
+      spoke = true;
+      lastVoice = now;
+    } else if (!spoke) {
+      mic.noise = mic.noise * 0.95 + lvl * 0.05; // 還沒開口時，持續估計環境噪音
+    }
+    if (spoke && now - lastVoice > pauseMs()) job.finish();
+    else if (!spoke && now - started > 8000) job.finish(); // 8 秒都沒說話就放棄
+    else if (now - started > 60000) job.finish(); // 單次最長一分鐘
+  }, 50);
+  recorder.start(250);
+  updateMic('listening');
+}
+
+async function recognize(blob) {
+  updateMic('busy');
+  try {
+    const res = await fetch('/api/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const text = (data.text || '').trim();
+    if (!text) return hint('沒有聽清楚，請再說一次');
+    if ($('confirmVoice').checked) {
+      // 送出前確認：辨識結果留在輸入框，修正錯字後再按送出
+      $('input').value = text;
+      $('input').focus();
+    } else {
+      submit(text);
+    }
+  } catch (err) {
+    hint(`語音辨識失敗：${err.message}`);
+  } finally {
+    updateMic('idle');
+  }
+}
+
+// 角色說話時偵測使用者開口：持續大聲約 0.3 秒就打斷，並開始錄下新的問題
+function startMonitor() {
+  stopMonitor();
+  if (!mic || !sttReady || !$('voiceStop').checked || listening) return;
+  let loudTicks = 0;
+  monitorTimer = setInterval(() => {
+    // 播放中門檻較高，避免把殘留的喇叭回音當成使用者說話
+    loudTicks = micLevel() > speechThreshold(6, 0.04) ? loudTicks + 1 : 0;
+    if (loudTicks >= 6) {
+      stopAudio();
+      startListening(true);
+    }
+  }, 50);
+}
+
+function stopMonitor() {
+  clearInterval(monitorTimer);
+  monitorTimer = null;
+}
+
+$('mic').addEventListener('click', () => (listening ? listening.finish() : startListening()));
+
+function showMicControls() {
+  for (const id of ['mic', 'handsFreeWrap', 'pauseWrap', 'confirmVoiceWrap', 'voiceStopWrap', 'micNotice']) $(id).hidden = false;
+}
+
+// 語音辨識服務啟動時要載入模型，頁面開啟時可能還沒好，每 3 秒再確認一次
+async function checkStt(attempt = 0) {
+  if (!canRecord) return;
+  try {
+    sttReady = (await api('/api/config')).sttReady;
+  } catch {
+    sttReady = false;
+  }
+  if (sttReady) return showMicControls();
+  if (attempt < 40) setTimeout(() => checkStt(attempt + 1), 3000);
+}
+
+try {
+  const saved = localStorage.getItem('pauseMs');
+  if (saved && [...$('pauseMs').options].some((o) => o.value === saved)) $('pauseMs').value = saved;
+} catch {
+  // 無法使用 localStorage 時沿用預設值
+}
+$('pauseMs').addEventListener('change', () => {
+  try { localStorage.setItem('pauseMs', $('pauseMs').value); } catch { /* 忽略 */ }
+});
+checkStt();
+
+api('/api/config').then((cfg) => {
+  // 用網址參數選角色，例如 /?c=yu_shu_chen；沒指定或未啟用時用預設角色
+  const wanted = new URLSearchParams(location.search).get('c');
+  const candidates = cfg.characters.filter((c) => c.kind === 'candidate');
+  const picked = candidates.find((c) => c.id === wanted);
+  const warns = [];
+  if (wanted && !picked?.enabled) warns.push(`${picked ? picked.name : '指定的角色'}尚未啟用，改為顯示${cfg.character.name}`);
+  character = picked?.enabled ? { ...picked, description: `${picked.title}（AI 角色，經授權的合成聲音）` } : cfg.character;
+  characterId = character.id;
+  voiceEnabled = character.voiceEnabled;
+  renderNav(candidates);
+  $('testModeWrap').hidden = !(cfg.ttsTestMode && voiceEnabled);
+  $('name').textContent = `${character.name}（AI 角色）`;
+  const face = document.createElement(character.avatarUrl ? 'img' : 'div');
+  if (character.avatarUrl) {
+    face.src = character.avatarUrl;
+    face.alt = `${character.name}照片（AI 角色使用）`;
+  } else {
+    face.className = 'initial';
+    face.textContent = character.name.slice(0, 1);
+  }
+  $('avatar').prepend(face);
+  $('avatar').hidden = false;
+  $('desc').textContent = `${character.description}｜對話模型：${cfg.llmModel}`;
+  document.title = `${character.name} AI 對談`;
+  if (!cfg.llmReady) warns.push('對話模型尚未設定 API key');
+  if (!voiceEnabled) warns.push(`${character.name}尚未設定 MiniMax 語音，只會顯示文字`);
+  if (warns.length) { $('setupWarn').textContent = warns.join('；'); $('setupWarn').hidden = false; }
+});
+</script>
+</body>
+</html>

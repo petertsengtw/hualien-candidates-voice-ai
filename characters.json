@@ -1,0 +1,42 @@
+[
+  {
+    "id": "wei_chia_hsien",
+    "name": "魏嘉賢",
+    "title": "花蓮縣長參選人",
+    "kind": "candidate",
+    "enabled": true,
+    "voiceIdEnv": "MINIMAX_VOICE_ID"
+  },
+  {
+    "id": "yu_shu_chen",
+    "name": "游淑貞",
+    "title": "花蓮縣長參選人",
+    "kind": "candidate",
+    "enabled": true,
+    "voiceIdEnv": "MINIMAX_VOICE_ID_YU_SHU_CHEN"
+  },
+  {
+    "id": "chang_chun",
+    "name": "張峻",
+    "title": "花蓮縣長參選人",
+    "kind": "candidate",
+    "enabled": true,
+    "voiceIdEnv": "MINIMAX_VOICE_ID_CHANG_CHUN"
+  },
+  {
+    "id": "demo_a",
+    "name": "測試候選人甲",
+    "title": "虛構測試角色",
+    "kind": "demo",
+    "enabled": true,
+    "voiceId": "Chinese (Mandarin)_Wise_Women"
+  },
+  {
+    "id": "demo_b",
+    "name": "測試候選人乙",
+    "title": "虛構測試角色",
+    "kind": "demo",
+    "enabled": true,
+    "voiceId": "Chinese (Mandarin)_Reliable_Executive"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "name": "ai-llm-voiceclone",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "花蓮縣長參選人 AI 語音對談（實驗原型）：單人與多人對談、政見引用、本機語音辨識",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=21.7"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0"
+  }
+}
