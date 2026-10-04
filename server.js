@@ -465,7 +465,7 @@ const server = createServer(async (req, res) => {
       const main = characters.find((c) => c.id === DEFAULT_CHARACTER?.id);
       return send(res, 200, {
         // 單人頁（index.html）使用的預設角色
-        character: main && { ...main, description: `${main.title}（AI 角色，經授權的合成聲音）` },
+        character: main && { ...main, description: `${main.title}（AI 角色，合成聲音）` },
         voiceEnabled: Boolean(main?.voiceEnabled),
         characters,
         demoCharacters: DEMO_CHARACTERS,

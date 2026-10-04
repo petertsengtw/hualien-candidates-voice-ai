@@ -73,7 +73,7 @@
         <div class="sub" id="desc"></div>
       </div>
     </div>
-    <div class="notice">這是經授權的 AI 角色與合成聲音，回答不代表本人即時發言或立場。政策相關回答優先依據官方政見，查不到才使用網路搜尋（可能包含媒體轉述或錯誤），請點開下方來源自行核對。</div>
+    <div class="notice">以下是 AI 角色與合成聲音，回答不代表本人即時發言或立場。政策回答內容優先依據各自的官方政見，查不到才使用網路搜尋，請點開來源自行核對。</div>
     <div class="notice" id="setupWarn" hidden></div>
     <div class="notice" id="micNotice" hidden>使用麥克風時，你的語音在這台電腦上辨識成文字，不會送到外部的語音辨識服務，辨識完即刪除錄音。</div>
   </header>
@@ -554,7 +554,7 @@ api('/api/config').then((cfg) => {
   const picked = candidates.find((c) => c.id === wanted);
   const warns = [];
   if (wanted && !picked?.enabled) warns.push(`${picked ? picked.name : '指定的角色'}尚未啟用，改為顯示${cfg.character.name}`);
-  character = picked?.enabled ? { ...picked, description: `${picked.title}（AI 角色，經授權的合成聲音）` } : cfg.character;
+  character = picked?.enabled ? { ...picked, description: `${picked.title}（AI 角色，合成聲音）` } : cfg.character;
   characterId = character.id;
   voiceEnabled = character.voiceEnabled;
   renderNav(candidates);
