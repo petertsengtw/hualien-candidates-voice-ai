@@ -41,6 +41,17 @@
   .sources details { margin: 2px 0 4px; color: var(--muted); }
   .sources summary { cursor: pointer; font-size: .8rem; }
   .sources .quote { white-space: pre-wrap; font-size: .8rem; padding: 4px 0 0 8px; border-left: 2px solid var(--line); }
+  .avatar img, .avatar .initial { transition: transform 80ms linear, box-shadow 80ms linear; }
+  .avatar.talking img, .avatar.talking .initial {
+    transform: scale(calc(1 + var(--level, 0) * 0.08));
+    box-shadow: 0 0 0 calc(3px + var(--level, 0) * 7px) color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  /* 卡通圖是直式全身圖：用直式大框完整顯示，不裁切 */
+  .avatar.cartoon { width: 150px; height: 260px; }
+  .avatar.cartoon img { border-radius: 12px; object-fit: contain; background: var(--panel); }
+  .avatar.cartoon.talking img { transform: scale(calc(1 + var(--level, 0) * 0.03)); }
+  .avatar.cartoon .badge { right: 6px; bottom: 6px; }
+  @media (max-width: 480px) { .avatar.cartoon { width: 110px; height: 190px; } }
   .who img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 6px; }
   h1 { font-size: 1.25rem; margin: 0; }
   .sub { color: var(--muted); font-size: .9rem; }
@@ -102,6 +113,7 @@
   </form>
 </div>
 
+<script src="/talking-avatar.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const chatHistory = [];
@@ -175,11 +187,12 @@ function stopAudio() {
 function playOne(src) {
   const a = new Audio(src);
   audio = a;
+  const anim = TalkingAvatar.start(a, $('avatar'), character); // 頭像顯示說話中的樣子
   return new Promise((resolve) => {
     a.onended = () => resolve('ended');
     a.onpause = () => { if (!a.ended) resolve('stopped'); };
     a.play().catch(() => resolve('blocked'));
-  });
+  }).finally(() => anim.then((stop) => stop())); // 不等動畫，播放結束就繼續
 }
 
 // 把回答切成句子分段合成：第一段較短，先合成先播；播放時同步合成下一段，縮短等待
@@ -560,15 +573,17 @@ api('/api/config').then((cfg) => {
   renderNav(candidates);
   $('testModeWrap').hidden = !(cfg.ttsTestMode && voiceEnabled);
   $('name').textContent = `${character.name}（AI 角色）`;
-  const face = document.createElement(character.avatarUrl ? 'img' : 'div');
-  if (character.avatarUrl) {
-    face.src = character.avatarUrl;
+  const faceUrl = character.cartoonUrl || character.avatarUrl;
+  const face = document.createElement(faceUrl ? 'img' : 'div');
+  if (faceUrl) {
+    face.src = faceUrl;
     face.alt = `${character.name}照片（AI 角色使用）`;
   } else {
     face.className = 'initial';
     face.textContent = character.name.slice(0, 1);
   }
   $('avatar').prepend(face);
+  $('avatar').classList.toggle('cartoon', Boolean(character.cartoonUrl)); // 卡通圖用直式大框完整顯示
   $('avatar').hidden = false;
   $('desc').textContent = `${character.description}｜對話模型：${cfg.llmModel}`;
   document.title = `${character.name} AI 對談`;

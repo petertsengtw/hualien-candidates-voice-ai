@@ -35,11 +35,21 @@
   .card.speaking { border-color: var(--speaking); box-shadow: 0 0 0 2px var(--speaking) inset; }
   .card.disabled { opacity: .6; }
   .card .head { display: flex; gap: 12px; align-items: center; }
-  .avatar { position: relative; flex: none; width: 56px; height: 56px; }
+  .avatar { position: relative; flex: none; width: 72px; height: 72px; }
+  .avatar img, .avatar .initial { transition: transform 80ms linear, box-shadow 80ms linear; }
+  .avatar.talking img, .avatar.talking .initial {
+    transform: scale(calc(1 + var(--level, 0) * 0.1));
+    box-shadow: 0 0 0 calc(3px + var(--level, 0) * 8px) color-mix(in srgb, var(--speaking) 45%, transparent);
+  }
   .avatar img, .avatar .initial { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); }
   .avatar .initial { display: grid; place-items: center; background: var(--user); font-size: 1.3rem; font-weight: 600; }
   .avatar .badge { position: absolute; right: -4px; bottom: -2px; background: var(--accent); color: #fff; font-size: .65rem; font-weight: 700; padding: 0 5px; border-radius: 999px; border: 2px solid var(--panel); }
   @media (prefers-color-scheme: dark) { .avatar .badge { color: #111; } }
+  /* 卡通圖是直式全身圖：在卡片上方用直式大框完整顯示，不裁切 */
+  .avatar.cartoon { width: 100%; height: 260px; }
+  .avatar.cartoon img { border-radius: 12px; object-fit: contain; background: var(--bg); }
+  .avatar.cartoon.talking img { transform: scale(calc(1 + var(--level, 0) * 0.03)); }
+  .avatar.cartoon .badge { right: 8px; bottom: 8px; }
   .card .name { font-weight: 700; }
   .card .state { font-size: .85rem; color: var(--muted); min-height: 1.4em; }
   .card .state.speaking { color: var(--speaking); font-weight: 600; }
@@ -114,6 +124,7 @@
   </form>
 </div>
 
+<script src="/talking-avatar.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let chars = []; // 畫面上的角色（依顯示順序）
@@ -137,10 +148,11 @@ async function api(path, body) {
 
 function avatarEl(c, cls = '') {
   const wrap = document.createElement('div');
-  wrap.className = 'avatar ' + cls;
-  const face = document.createElement(c.avatarUrl ? 'img' : 'div');
-  if (c.avatarUrl) {
-    face.src = c.avatarUrl;
+  wrap.className = 'avatar ' + cls + (c.cartoonUrl ? ' cartoon' : '');
+  const faceUrl = c.cartoonUrl || c.avatarUrl;
+  const face = document.createElement(faceUrl ? 'img' : 'div');
+  if (faceUrl) {
+    face.src = faceUrl;
     face.alt = `${c.name}照片（AI 角色使用）`;
   } else {
     face.className = 'initial';
@@ -171,7 +183,13 @@ function renderCards() {
     title.className = 'sub';
     title.textContent = c.title + (c.knowledge?.length ? `｜政見資料：${c.knowledge.map((d) => d.title).join('、')}` : '');
     info.append(name, title);
-    head.append(avatarEl(c), info);
+    // 有卡通圖時放在卡片最上方（直式大框）；只有照片時維持圓形小頭像在名字左邊
+    if (c.cartoonUrl) {
+      card.append(avatarEl(c));
+      head.append(info);
+    } else {
+      head.append(avatarEl(c), info);
+    }
     const state = document.createElement('div');
     state.className = 'state';
     state.id = `state-${c.id}`;
@@ -327,14 +345,16 @@ function stopAudio() {
   $('stop').disabled = true;
 }
 
-function playOne(src) {
+function playOne(src, c) {
   const a = new Audio(src);
   audio = a;
+  // 卡片上的頭像顯示說話中的樣子
+  const anim = TalkingAvatar.start(a, $(`card-${c.id}`)?.querySelector('.avatar'), c);
   return new Promise((resolve) => {
     a.onended = () => resolve('ended');
     a.onpause = () => { if (!a.ended) resolve('stopped'); };
     a.play().catch(() => resolve('blocked'));
-  });
+  }).finally(() => anim.then((stop) => stop())); // 不等動畫，播放結束就繼續
 }
 
 function splitForSpeech(text) {
@@ -378,7 +398,7 @@ async function playSequence(c, loaders, status) {
       }
       if (token !== playback) { setStatus(status, '已停止', false, [replay()]); return 'stopped'; }
       if (i + 1 < loaders.length) next = loaders[i + 1]();
-      const playing = playOne(src);
+      const playing = playOne(src, c);
       if (i === 0) {
         setStatus(status, '播放中（合成聲音）');
         setState(c.id, '說話中…', 'speaking');

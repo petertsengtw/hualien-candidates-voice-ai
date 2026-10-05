@@ -139,10 +139,14 @@ const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp',
 };
 
-// 角色照片：放在 public/images/<角色 id>.jpg（或 .jpeg / .png / .webp）
-async function findAvatar(id) {
+// 角色圖片放在 public/images/：
+//   <角色 id>.jpg               照片
+//   <角色 id>-cartoon.png       卡通圖（閉嘴，平常顯示）
+//   <角色 id>-cartoon-talk.png  卡通圖（張嘴，說話時依音量切換）
+// 副檔名可用 .jpg / .jpeg / .png / .webp
+async function findImage(name) {
   for (const ext of ['.jpg', '.jpeg', '.png', '.webp']) {
-    const file = `images/${id}${ext}`;
+    const file = `images/${name}${ext}`;
     try {
       await readFile(join(PUBLIC_DIR, file));
       return `/${file}`;
@@ -151,6 +155,14 @@ async function findAvatar(id) {
     }
   }
   return null;
+}
+
+async function findImages(id) {
+  return {
+    avatarUrl: await findImage(id),
+    cartoonUrl: await findImage(`${id}-cartoon`),
+    cartoonTalkUrl: await findImage(`${id}-cartoon-talk`),
+  };
 }
 
 // 角色的知識文件：knowledge/<角色 id>/*.md，開頭為 --- 包住的 title / source / retrieved 等資訊
@@ -459,7 +471,7 @@ const server = createServer(async (req, res) => {
           disabledReason: c.enabled ? null : c.disabledReason || '尚未啟用',
           voiceEnabled: Boolean(c.enabled && c.voiceId && MINIMAX_API_KEY),
           knowledge: c.knowledge.map((d) => ({ title: d.title, retrieved: d.retrieved })),
-          avatarUrl: await findAvatar(c.id),
+          ...(await findImages(c.id)),
         });
       }
       const main = characters.find((c) => c.id === DEFAULT_CHARACTER?.id);
