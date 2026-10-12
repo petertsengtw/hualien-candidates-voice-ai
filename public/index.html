@@ -117,7 +117,7 @@
         </select>
         算說完</label>
       <label id="confirmVoiceWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="confirmVoice"> 送出前確認</label>
-      <label id="voiceStopWrap" class="sub" hidden style="white-space:nowrap" title="角色說話時直接開口即可打斷（用喇叭時若常被誤打斷，請戴耳機或取消勾選）"><input type="checkbox" id="voiceStop" checked> 開口即打斷</label>
+      <label id="voiceStopWrap" class="sub" hidden style="white-space:nowrap" title="角色說話時直接開口即可打斷。建議戴耳機時才開啟；用喇叭或環境吵雜時容易被誤打斷"><input type="checkbox" id="voiceStop"> 開口即打斷</label>
       <label id="testModeWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="testMode"> 朗讀測試</label>
       <button type="button" id="stop" disabled>停止</button>
       <button type="submit" class="primary" id="send">送出</button>
@@ -126,6 +126,7 @@
 </div>
 
 <script src="/talking-avatar.js"></script>
+<script src="/chat-stream.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const chatHistory = [];
@@ -243,23 +244,28 @@ function actionBtn(label, onClick) {
   return b;
 }
 
-async function playSequence(loaders, status) {
+// source：段落陣列（重播、朗讀測試），或串流回答的語音佇列（一邊寫一邊播）
+async function playSequence(source, status) {
+  const isQueue = !Array.isArray(source);
+  const getLoader = (i) => (isQueue ? source.get(i) : Promise.resolve(source[i] ?? null));
   stopAudio();
   const token = playback;
-  const replay = (label = '重播') => actionBtn(label, () => playSequence(loaders, status));
+  const replay = (label = '重播') => actionBtn(label, () => playSequence(isQueue ? source.all() : source, status));
   $('stop').disabled = false;
-  let next = loaders[0]();
-  for (let i = 0; i < loaders.length; i++) {
+  for (let i = 0; ; i++) {
+    const loader = await getLoader(i);
+    if (token !== playback) return setStatus(status, i === 0 ? '已取消' : '已停止', false, [replay()]);
+    if (!loader) break;
     let src;
     try {
-      src = await next;
+      src = await loader();
     } catch (err) {
       if (token !== playback) return;
       $('stop').disabled = true;
       return setStatus(status, `語音失敗：${err.message}`, true, [replay('重試語音')]);
     }
     if (token !== playback) return setStatus(status, i === 0 ? '已取消' : '已停止', false, [replay()]);
-    if (i + 1 < loaders.length) next = loaders[i + 1](); // 播放這段時先合成下一段
+    getLoader(i + 1).then((next) => next?.()); // 播放這段時先合成下一段
     const playing = playOne(src);
     if (i === 0) {
       setStatus(status, '播放中（合成聲音）');
@@ -360,6 +366,8 @@ async function submit(text) {
   stopAudio();
   if (pending) {
     // 被中斷的問題沒有回答，從對話紀錄移除，避免模型同時回答兩題
+    pending.controller.abort();
+    pending.queue?.end();
     chatHistory.splice(chatHistory.indexOf(pending.question), 1);
     setStatus(pending.reply.status, '已中斷（改回答新問題）');
   }
@@ -367,18 +375,35 @@ async function submit(text) {
   chatHistory.push(question);
   addMessage('user', text);
   const reply = addMessage('assistant', '');
-  pending = { question, reply };
+  // 串流回答：文字即時顯示，寫完第一句就開始合成並播放
+  const queue = voiceEnabled ? createSpeechQueue(ttsLoader) : null;
+  const controller = new AbortController();
+  pending = { question, reply, controller, queue };
   setStatus(reply.status, '思考中（可能需要上網搜尋）…');
+  let shown = '';
+  let playing = null;
   try {
-    const { text: answer, sources } = await api('/api/chat', { characterId, messages: chatHistory.slice() });
+    const { text: answer, sources } = await streamChat({ characterId, messages: chatHistory.slice() }, (delta) => {
+      if (myTurn !== turnId) return;
+      shown += delta;
+      reply.body.textContent = shown.trimStart();
+      if (!queue) return;
+      queue.feed(delta);
+      if (!playing) {
+        setStatus(reply.status, '產生語音中…');
+        playing = playSequence(queue, reply.status);
+      }
+    }, controller.signal);
+    queue?.end();
     if (myTurn !== turnId) return; // 已被新問題中斷，結果不採用
     pending = null;
     chatHistory.push({ role: 'assistant', content: answer });
     reply.body.textContent = answer;
     renderSources(reply, sources);
-    if (voiceEnabled) await speak(answer, reply.status, myTurn);
-    else setStatus(reply.status, '未設定聲音，只顯示文字');
+    if (!voiceEnabled) setStatus(reply.status, '未設定聲音，只顯示文字');
+    else await (playing ?? speak(answer, reply.status, myTurn));
   } catch (err) {
+    queue?.end();
     if (myTurn !== turnId) return;
     pending = null;
     chatHistory.splice(chatHistory.indexOf(question), 1);
@@ -531,11 +556,27 @@ async function recognize(blob) {
 function startMonitor() {
   stopMonitor();
   if (!mic || !sttReady || !$('voiceStop').checked || listening) return;
+  // 先用 0.5 秒量「角色說話時」麥克風收到的環境音（含喇叭回音）當基準；
+  // 之後要明顯比基準大聲、且持續約 0.7 秒（中間允許 0.15 秒停頓）才算你在說話，避免旁人聲音或雜音誤觸
+  let floor = 0;
+  let ticks = 0;
   let loudTicks = 0;
+  let quietTicks = 0;
   monitorTimer = setInterval(() => {
-    // 播放中門檻較高，避免把殘留的喇叭回音當成使用者說話
-    loudTicks = micLevel() > speechThreshold(6, 0.04) ? loudTicks + 1 : 0;
-    if (loudTicks >= 6) {
+    const lvl = micLevel();
+    ticks++;
+    if (ticks <= 10) {
+      floor += lvl / 10;
+      return;
+    }
+    if (lvl > Math.max(0.06, floor * 4, speechThreshold(6, 0.04))) {
+      loudTicks++;
+      quietTicks = 0;
+    } else {
+      floor = floor * 0.97 + lvl * 0.03;
+      if (++quietTicks > 3) loudTicks = 0;
+    }
+    if (loudTicks >= 14) {
       stopAudio();
       startListening(true);
     }
@@ -571,6 +612,14 @@ try {
 } catch {
   // 無法使用 localStorage 時沿用預設值
 }
+try {
+  $('voiceStop').checked = localStorage.getItem('voiceStop') === 'true';
+} catch {
+  // 無法使用 localStorage 時維持預設關閉
+}
+$('voiceStop').addEventListener('change', () => {
+  try { localStorage.setItem('voiceStop', String($('voiceStop').checked)); } catch { /* 忽略 */ }
+});
 $('pauseMs').addEventListener('change', () => {
   try { localStorage.setItem('pauseMs', $('pauseMs').value); } catch { /* 忽略 */ }
 });

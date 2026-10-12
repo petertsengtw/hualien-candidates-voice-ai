@@ -105,7 +105,7 @@ function candidatePrompt(character) {
 ${MULTI_PARTY_RULES}
 
 規則：
-1. 一律使用繁體中文，像面對面聊天一樣口語、簡短，每次回答盡量不超過 100 字，先講重點，使用者想知道更多再補充；不使用 Markdown、條列符號、網址或表情符號，因為文字會被轉成語音朗讀；來源連結由頁面另外顯示。
+1. 一律使用繁體中文，像面對面聊天一樣口語、簡短，每次回答控制在 80 字以內（大約兩三句話），只講最重要的重點，使用者想知道更多再補充；不使用 Markdown、條列符號、網址或表情符號，因為文字會被轉成語音朗讀；來源連結由頁面另外顯示。
 ${knowledgeRule(character)}
 3. 以第一人稱「我」回答，像${character.name}本人面對面跟民眾說明，例如「我主張……」「我之前在議會提過……」。但第一人稱只能用在官方文件或搜尋結果明確記載是${character.name}本人說過、提出過或做過的事，並口頭帶出出處與時間，例如「我九月接受自由時報訪問時提過，……」。
 4. 不是本人說的內容不能變成第一人稱：記者的分析、其他人的評論或批評，要用「有媒體報導」「有人認為」這類說法轉述。注意同名同姓或同一篇報導中的其他候選人，不要張冠李戴。資料之間有矛盾或時間不同時，要說明日期與差異。
@@ -270,14 +270,13 @@ function buildMessages(transcript, character) {
   return messages;
 }
 
-async function chat(character, transcript) {
+// 組出送給 Claude 的請求（一般與串流兩種回答方式共用）
+function prepareChat(character, transcript) {
   const messages = buildMessages(transcript, character);
-  const spokeBefore = hasSpoken(transcript, character);
   const isCandidate = character.kind === 'candidate';
   if (character.knowledge.length) {
     messages[0] = { role: 'user', content: [...knowledgeBlocks(character.knowledge), { type: 'text', text: messages[0].content }] };
   }
-
   const params = {
     model: CLAUDE_MODEL,
     max_tokens: 16000,
@@ -290,17 +289,11 @@ async function chat(character, transcript) {
     params.betas = ['server-side-fallback-2026-07-01'];
     params.fallbacks = 'default';
   }
+  return { params, messages, spokeBefore: hasSpoken(transcript, character) };
+}
 
-  // 伺服器端搜尋迴圈達上限時會回傳 pause_turn，需帶著目前內容再送一次讓它接續
-  const blocks = [];
-  let response;
-  for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
-    response = await callClaude(params);
-    blocks.push(...response.content);
-    if (response.stop_reason !== 'pause_turn') break;
-    params.messages = [...messages, { role: 'assistant', content: blocks.slice() }];
-  }
-
+// 整理最終的回答文字與來源
+function finishChat(character, blocks, response, spokeBefore) {
   if (response.stop_reason === 'refusal') throw new Error('Claude 拒絕回答這個問題');
   let text = blocks
     .filter((b) => b.type === 'text')
@@ -311,16 +304,75 @@ async function chat(character, transcript) {
   return { text, sources: collectSources(blocks, character.knowledge) };
 }
 
+async function chat(character, transcript) {
+  const { params, messages, spokeBefore } = prepareChat(character, transcript);
+  // 伺服器端搜尋迴圈達上限時會回傳 pause_turn，需帶著目前內容再送一次讓它接續
+  const blocks = [];
+  let response;
+  for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
+    response = await callClaude(params);
+    blocks.push(...response.content);
+    if (response.stop_reason !== 'pause_turn') break;
+    params.messages = [...messages, { role: 'assistant', content: blocks.slice() }];
+  }
+  return finishChat(character, blocks, response, spokeBefore);
+}
+
+// 串流回答：Claude 每寫出一段文字就交給 onText，網頁拿到完整的句子就能先合成、先播放。
+// signal 中止時（例如使用者問了新問題）停止串流。
+async function chatStream(character, transcript, onText, signal) {
+  const { params, messages, spokeBefore } = prepareChat(character, transcript);
+  // 已經說過身分說明時，開頭先暫存到第一個句尾，確認不是重複的身分說明再送出
+  let gate = spokeBefore ? '' : null;
+  const emit = (delta) => {
+    if (gate === null) return onText(delta);
+    gate += delta;
+    if (/[。！？\n]/.test(gate) || gate.length > 80) {
+      const cleaned = stripRepeatedDisclaimer(gate, character);
+      gate = null;
+      if (cleaned) onText(cleaned);
+    }
+  };
+
+  const blocks = [];
+  let response;
+  for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
+    const stream = anthropic.beta.messages.stream(params);
+    const abort = () => stream.abort();
+    signal?.addEventListener('abort', abort);
+    stream.on('text', emit);
+    try {
+      response = await stream.finalMessage();
+    } catch (err) {
+      throw mapClaudeError(err);
+    } finally {
+      signal?.removeEventListener('abort', abort);
+    }
+    blocks.push(...response.content);
+    if (response.stop_reason !== 'pause_turn') break;
+    params.messages = [...messages, { role: 'assistant', content: blocks.slice() }];
+  }
+  if (gate) {
+    const cleaned = stripRepeatedDisclaimer(gate, character);
+    if (cleaned) onText(cleaned);
+  }
+  return finishChat(character, blocks, response, spokeBefore);
+}
+
+function mapClaudeError(err) {
+  if (err instanceof Anthropic.AuthenticationError) return new Error('Claude API key 無效，請檢查 .env 的 ANTHROPIC_API_KEY');
+  if (err instanceof Anthropic.PermissionDeniedError) return new Error(`這把 Claude API key 沒有使用 ${CLAUDE_MODEL} 的權限`);
+  if (err instanceof Anthropic.NotFoundError) return new Error(`找不到模型 ${CLAUDE_MODEL}，請檢查 .env 的 CLAUDE_MODEL`);
+  if (err instanceof Anthropic.RateLimitError) return new Error('Claude 使用量達到上限，請稍後再試');
+  if (err instanceof Anthropic.APIError) return new Error(`Claude 失敗（HTTP ${err.status}）：${err.message}`);
+  return err;
+}
+
 async function callClaude(params) {
   try {
     return await anthropic.beta.messages.create(params);
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) throw new Error('Claude API key 無效，請檢查 .env 的 ANTHROPIC_API_KEY');
-    if (err instanceof Anthropic.PermissionDeniedError) throw new Error(`這把 Claude API key 沒有使用 ${CLAUDE_MODEL} 的權限`);
-    if (err instanceof Anthropic.NotFoundError) throw new Error(`找不到模型 ${CLAUDE_MODEL}，請檢查 .env 的 CLAUDE_MODEL`);
-    if (err instanceof Anthropic.RateLimitError) throw new Error('Claude 使用量達到上限，請稍後再試');
-    if (err instanceof Anthropic.APIError) throw new Error(`Claude 失敗（HTTP ${err.status}）：${err.message}`);
-    throw err;
+    throw mapClaudeError(err);
   }
 }
 
@@ -365,8 +417,12 @@ function collectSources(blocks, knowledge) {
   };
 }
 
+// 語音合成超過這個秒數就在終端機記一筆，方便判斷是不是 MiniMax 那邊變慢
+const SLOW_TTS_SECONDS = 5;
+
 async function tts(text, voiceId) {
   const spoken = text.replace(/[*#`>_~\[\]]/g, '').trim();
+  const startedAt = Date.now();
   let res;
   try {
     res = await fetch(`${MINIMAX_BASE_URL}/t2a_v2`, {
@@ -390,6 +446,11 @@ async function tts(text, voiceId) {
   if (!res.ok || (code !== undefined && code !== 0)) {
     const msg = data.base_resp?.status_msg || data.error?.message || res.statusText;
     throw new Error(`MiniMax 語音失敗（HTTP ${res.status}${code ? `，code ${code}` : ''}）：${msg}`);
+  }
+  const seconds = (Date.now() - startedAt) / 1000;
+  if (seconds > SLOW_TTS_SECONDS) {
+    const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+    console.warn(`[${time}] 語音合成較慢：${seconds.toFixed(1)} 秒（${spoken.length} 字，MiniMax trace ${res.headers.get('trace-id') || data.trace_id || '無'}）`);
   }
   const hex = data.data?.audio;
   if (!hex) throw new Error('MiniMax TTS 沒有回傳音訊');
@@ -528,7 +589,7 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/chat') {
+    if (req.method === 'POST' && (url.pathname === '/api/chat' || url.pathname === '/api/chat-stream')) {
       if (!anthropic) return send(res, 500, { error: '尚未設定 ANTHROPIC_API_KEY' });
       const body = await readJson(req);
       const character = findCharacter(body.characterId || DEFAULT_CHARACTER?.id);
@@ -539,9 +600,28 @@ const server = createServer(async (req, res) => {
         ? body.transcript
         : (body.messages || []).map((m) => ({ role: m.role, characterId: character.id, text: m.content }));
       if (!transcript.length) return send(res, 400, { error: '對話內容不可為空' });
-      const { text, sources } = await chat(character, transcript);
-      if (!text) return send(res, 502, { error: '模型沒有回傳內容' });
-      return send(res, 200, { text, sources });
+
+      if (url.pathname === '/api/chat') {
+        const { text, sources } = await chat(character, transcript);
+        if (!text) return send(res, 502, { error: '模型沒有回傳內容' });
+        return send(res, 200, { text, sources });
+      }
+
+      // 串流：每行一個 JSON（{type:"text"} 逐段文字、{type:"done"} 完整回答與來源、{type:"error"}）
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache' });
+      const line = (obj) => res.write(`${JSON.stringify(obj)}\n`);
+      const controller = new AbortController();
+      res.on('close', () => { if (!res.writableEnded) controller.abort(); }); // 使用者中斷或換題
+      try {
+        const { text, sources } = await chatStream(character, transcript, (delta) => line({ type: 'text', text: delta }), controller.signal);
+        line(text ? { type: 'done', text, sources } : { type: 'error', error: '模型沒有回傳內容' });
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          line({ type: 'error', error: err.message });
+        }
+      }
+      return res.end();
     }
 
     if (req.method === 'POST' && url.pathname === '/api/tts') {

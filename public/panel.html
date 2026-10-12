@@ -132,7 +132,7 @@
           <option value="4000">4 秒</option>
         </select>
         算說完</label>
-      <label id="voiceStopWrap" class="sub" hidden style="white-space:nowrap" title="角色說話時直接開口即可打斷（用喇叭時若常被誤打斷，請戴耳機或取消勾選）"><input type="checkbox" id="voiceStop" checked> 開口即打斷</label>
+      <label id="voiceStopWrap" class="sub" hidden style="white-space:nowrap" title="角色說話時直接開口即可打斷。建議戴耳機時才開啟；用喇叭或環境吵雜時容易被誤打斷"><input type="checkbox" id="voiceStop"> 開口即打斷</label>
       <button type="button" id="stop" disabled>停止</button>
       <button type="submit" class="primary" id="send">送出</button>
     </div>
@@ -140,6 +140,7 @@
 </div>
 
 <script src="/talking-avatar.js"></script>
+<script src="/chat-stream.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let chars = []; // 畫面上的角色（依顯示順序）
@@ -149,6 +150,7 @@ let audio = null;
 let playback = 0;
 let speakingId = null;
 let sttReady = false;
+let chatController = null; // 進行中的串流回答，換題或停止時中斷
 
 const ALL = 'all';
 const byId = (id) => chars.find((c) => c.id === id);
@@ -375,18 +377,6 @@ function playOne(src, c) {
   }).finally(() => anim.then((stop) => stop())); // 不等動畫，播放結束就繼續
 }
 
-function splitForSpeech(text) {
-  const parts = text.split(/(?<=[。！？!?；;\n])/).map((s) => s.trim()).filter(Boolean);
-  const chunks = [];
-  for (const p of parts) {
-    const last = chunks[chunks.length - 1];
-    const minLength = chunks.length > 1 ? 40 : 12;
-    if (last !== undefined && last.length < minLength) chunks[chunks.length - 1] = last + p;
-    else chunks.push(p);
-  }
-  return chunks.length ? chunks : [text];
-}
-
 function ttsLoader(text, characterId) {
   let pending = null;
   return () => {
@@ -398,24 +388,29 @@ function ttsLoader(text, characterId) {
 }
 
 // 依序播放一位角色的回答；回傳 'ended' / 'stopped' / 'blocked' / 'failed'
-async function playSequence(c, loaders, status) {
+// source：段落陣列（重播），或串流回答的語音佇列（一邊寫一邊播）
+async function playSequence(c, source, status) {
+  const isQueue = !Array.isArray(source);
+  const getLoader = (i) => (isQueue ? source.get(i) : Promise.resolve(source[i] ?? null));
   stopAudio();
   const token = playback;
-  const replay = (label = '重播') => actionBtn(label, () => playSequence(c, loaders, status));
+  const replay = (label = '重播') => actionBtn(label, () => playSequence(c, isQueue ? source.all() : source, status));
   $('stop').disabled = false;
   speakingId = c.id;
-  let next = loaders[0]();
   try {
-    for (let i = 0; i < loaders.length; i++) {
+    for (let i = 0; ; i++) {
+      const loader = await getLoader(i);
+      if (token !== playback) { setStatus(status, '已停止', false, [replay()]); return 'stopped'; }
+      if (!loader) break;
       let src;
       try {
-        src = await next;
+        src = await loader();
       } catch (err) {
         if (token === playback) setStatus(status, `語音失敗：${err.message}`, true, [replay('重試語音')]);
         return 'failed';
       }
       if (token !== playback) { setStatus(status, '已停止', false, [replay()]); return 'stopped'; }
-      if (i + 1 < loaders.length) next = loaders[i + 1]();
+      getLoader(i + 1).then((next) => next?.()); // 播放這段時先合成下一段
       const playing = playOne(src, c);
       if (i === 0) {
         setStatus(status, '播放中（合成聲音）');
@@ -442,15 +437,6 @@ async function playSequence(c, loaders, status) {
   }
 }
 
-async function speakAs(c, text, status) {
-  if (!c.voiceEnabled) {
-    setStatus(status, '未設定聲音，只顯示文字');
-    return 'ended';
-  }
-  setStatus(status, '產生語音中…');
-  return playSequence(c, splitForSpeech(text).map((t) => ttsLoader(t, c.id)), status);
-}
-
 // ── 提問：被問的人依序回答；下一位在前一位說話時就開始準備（看得到前一位的發言）──
 async function ask(text, ids) {
   const targets = ids.map(byId).filter((c) => c?.enabled);
@@ -462,34 +448,62 @@ async function ask(text, ids) {
   addMessage(null, text, `你 → ${targets.length > 1 ? '全體' : targets[0].name}`);
   for (const c of targets) setState(c.id, '排隊中', 'thinking');
 
+  // 串流回答：文字即時顯示，寫完第一句就開始合成；但要等前一位說完才開始播
+  chatController?.abort();
+  const controller = (chatController = new AbortController());
   let previous = null; // 前一位的播放
   for (const c of targets) {
     if (myTurn !== turnId) return;
     setState(c.id, '思考中…', 'thinking');
     const msg = addMessage(c, '');
     setStatus(msg.status, '思考中（可能需要查資料）…');
+    const prev = previous;
+    const queue = c.voiceEnabled ? createSpeechQueue((t) => ttsLoader(t, c.id)) : null;
+    let playing = null;
+    const startPlaying = () => {
+      playing ??= (async () => {
+        if (prev) {
+          setState(c.id, '等前一位說完', 'thinking');
+          setStatus(msg.status, '等前一位說完…');
+          const result = await prev;
+          if (result === 'stopped' || myTurn !== turnId) return 'stopped';
+        }
+        if (myTurn !== turnId) return 'stopped';
+        setStatus(msg.status, '產生語音中…');
+        return playSequence(c, queue, msg.status);
+      })();
+      return playing;
+    };
+    let shown = '';
     let reply;
     try {
-      reply = await api('/api/chat', { characterId: c.id, transcript: transcript.slice() });
+      reply = await streamChat({ characterId: c.id, transcript: transcript.slice() }, (delta) => {
+        if (myTurn !== turnId) return;
+        shown += delta;
+        msg.body.textContent = shown.trimStart();
+        if (!queue) return;
+        queue.feed(delta);
+        startPlaying();
+      }, controller.signal);
     } catch (err) {
+      queue?.end();
       if (myTurn !== turnId) return;
       setStatus(msg.status, `回答失敗：${err.message}`, true);
       setState(c.id, '回答失敗');
+      if (playing) previous = playing;
       continue;
     }
+    queue?.end();
     if (myTurn !== turnId) { msg.el.remove(); return; }
     transcript.push({ role: 'assistant', characterId: c.id, text: reply.text });
     msg.body.textContent = reply.text;
     renderSources(msg, reply.sources);
     updateRespondButtons();
-    setState(c.id, '等前一位說完', 'thinking');
-    setStatus(msg.status, '等前一位說完…');
-    if (previous) {
-      const result = await previous;
-      if (result === 'stopped' || myTurn !== turnId) return;
+    if (!c.voiceEnabled) {
+      setStatus(msg.status, '未設定聲音，只顯示文字');
+      continue;
     }
-    if (myTurn !== turnId) return;
-    previous = speakAs(c, reply.text, msg.status);
+    previous = playing ?? startPlaying();
   }
   const last = previous ? await previous : 'ended';
   // 連續對談：最後一位說完後自動開始聽下一個問題，對象與這一題相同
@@ -500,6 +514,7 @@ async function ask(text, ids) {
 
 function stopAll() {
   turnId++;
+  chatController?.abort();
   stopAudio();
   resetStates();
 }
@@ -637,10 +652,27 @@ async function recognize(blob, ids, btn) {
 function startMonitor() {
   stopMonitor();
   if (!mic || !sttReady || !$('voiceStop').checked || listening) return;
+  // 先用 0.5 秒量「角色說話時」麥克風收到的環境音（含喇叭回音）當基準；
+  // 之後要明顯比基準大聲、且持續約 0.7 秒（中間允許 0.15 秒停頓）才算你在說話，避免旁人聲音或雜音誤觸
+  let floor = 0;
+  let ticks = 0;
   let loudTicks = 0;
+  let quietTicks = 0;
   monitorTimer = setInterval(() => {
-    loudTicks = micLevel() > speechThreshold(6, 0.04) ? loudTicks + 1 : 0;
-    if (loudTicks >= 6) {
+    const lvl = micLevel();
+    ticks++;
+    if (ticks <= 10) {
+      floor += lvl / 10;
+      return;
+    }
+    if (lvl > Math.max(0.06, floor * 4, speechThreshold(6, 0.04))) {
+      loudTicks++;
+      quietTicks = 0;
+    } else {
+      floor = floor * 0.97 + lvl * 0.03;
+      if (++quietTicks > 3) loudTicks = 0;
+    }
+    if (loudTicks >= 14) {
       const id = speakingId;
       stopMonitor();
       startListening(id ? [id] : targetIds($('target').value), id ? $(`mic-${id}`) : $('micAll'), true);
@@ -679,6 +711,14 @@ try {
   const saved = localStorage.getItem('pauseMs');
   if (saved && [...$('pauseMs').options].some((o) => o.value === saved)) $('pauseMs').value = saved;
 } catch { /* 沿用預設值 */ }
+try {
+  $('voiceStop').checked = localStorage.getItem('voiceStop') === 'true';
+} catch {
+  // 無法使用 localStorage 時維持預設關閉
+}
+$('voiceStop').addEventListener('change', () => {
+  try { localStorage.setItem('voiceStop', String($('voiceStop').checked)); } catch { /* 忽略 */ }
+});
 $('pauseMs').addEventListener('change', () => {
   try { localStorage.setItem('pauseMs', $('pauseMs').value); } catch { /* 忽略 */ }
 });
