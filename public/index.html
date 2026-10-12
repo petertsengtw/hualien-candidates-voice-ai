@@ -177,7 +177,7 @@ function addMessage(role, text, label) {
   status.className = 'status';
   el.append(who, body, status);
   $('log').append(el);
-  el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  // 不自動捲到最新訊息：畫面停在原處，讓角色頭像一直看得到
   return { el, body, status };
 }
 
