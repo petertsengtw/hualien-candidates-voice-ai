@@ -2,9 +2,21 @@
 // 沒有張嘴卡通圖（例如只有照片）時，只用光環與輕微縮放表示正在說話，不在真人照片上做假嘴型。
 const TalkingAvatar = (() => {
   let ctx = null;
+  const analysers = new WeakMap(); // 同一個 <audio> 只能接上一次，接過就重複使用
+
+  // 在使用者點擊時呼叫：手機瀏覽器只允許在點擊當下啟動音訊處理
+  function unlock() {
+    try {
+      ctx ??= new AudioContext();
+      if (ctx.state === 'suspended') ctx.resume();
+    } catch {
+      // 不支援時只是沒有跟音量走的動畫
+    }
+  }
 
   // 讓 <audio> 的聲音經過音量分析器再播出；瀏覽器不允許時回傳 null（照常播放，只是動畫不跟音量）
   async function analyserFor(audioEl) {
+    if (analysers.has(audioEl)) return analysers.get(audioEl);
     try {
       ctx ??= new AudioContext();
       // 頁面還沒有使用者互動時 resume() 可能一直不回應，最多等 300 毫秒
@@ -14,6 +26,7 @@ const TalkingAvatar = (() => {
       analyser.fftSize = 512;
       ctx.createMediaElementSource(audioEl).connect(analyser);
       analyser.connect(ctx.destination);
+      analysers.set(audioEl, analyser);
       return analyser;
     } catch {
       return null;
@@ -77,5 +90,27 @@ const TalkingAvatar = (() => {
     };
   }
 
-  return { start };
+  return { start, unlock };
+})();
+
+// 共用的播放器：手機（特別是 iPhone）只允許「點擊過的」<audio> 之後自動播放，
+// 所以整頁只用這一個，並在第一次點擊或按鍵時解鎖，連續對談時角色的聲音才能自動播出。
+const SharedPlayer = (() => {
+  const el = new Audio();
+  el.preload = 'auto';
+  let unlocked = false;
+  // 一段極短的靜音 wav，用來在點擊當下「播一次」以解鎖
+  const SILENCE = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+
+  function unlock() {
+    TalkingAvatar.unlock();
+    if (unlocked) return;
+    unlocked = true;
+    el.src = SILENCE;
+    el.play().then(() => el.pause()).catch(() => { unlocked = false; });
+  }
+  for (const type of ['pointerdown', 'keydown', 'touchend']) {
+    document.addEventListener(type, unlock, { capture: true, passive: true });
+  }
+  return { el, unlock };
 })();

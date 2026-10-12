@@ -87,6 +87,20 @@
   form { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); }
   textarea { flex: 1 1 260px; font: inherit; resize: none; min-height: 44px; max-height: 160px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* 手機：輸入框占滿一行，麥克風做成大按鈕放最前面，按鈕高度至少 44px 方便手指點 */
+  /* 排成三列：輸入框＋送出、麥克風＋停止、其他設定 */
+  @media (max-width: 640px) {
+    form { gap: 8px; padding: 8px 0 10px; align-items: center; }
+    .controls { display: contents; }
+    textarea { order: 0; flex: 1 1 calc(100% - 76px); min-width: 0; }
+    #send { order: 1; }
+    #micAll { order: 2; flex: 1 1 calc(100% - 76px); font-size: 1.05rem; padding: 10px; }
+    #stop { order: 3; }
+    .controls > label, .controls > select { order: 4; font-size: .8rem; }
+    form button, .card .actions button { min-height: 44px; }
+    .card .actions button { flex: 1; }
+    .avatar.cartoon { height: 200px; }
+  }
 </style>
 </head>
 <body>
@@ -110,6 +124,7 @@
       <label class="sub" for="target">問</label>
       <select id="target"></select>
       <button type="button" id="micAll" hidden>麥克風</button>
+      <label id="handsFreeWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="handsFree"> 連續對談</label>
       <label id="pauseWrap" class="sub" hidden style="white-space:nowrap">停頓
         <select id="pauseMs">
           <option value="1500">1.5 秒</option>
@@ -346,10 +361,13 @@ function stopAudio() {
 }
 
 function playOne(src, c) {
-  const a = new Audio(src);
+  // 用整頁共用、點擊時已解鎖的播放器，手機上連續對談時才能自動播放
+  const a = SharedPlayer.el;
+  a.onended = null;
+  a.onpause = null;
+  a.src = src;
   audio = a;
-  // 卡片上的頭像顯示說話中的樣子
-  const anim = TalkingAvatar.start(a, $(`card-${c.id}`)?.querySelector('.avatar'), c);
+  const anim = TalkingAvatar.start(a, $(`card-${c.id}`)?.querySelector('.avatar'), c); // 卡片上的頭像顯示說話中的樣子
   return new Promise((resolve) => {
     a.onended = () => resolve('ended');
     a.onpause = () => { if (!a.ended) resolve('stopped'); };
@@ -473,7 +491,11 @@ async function ask(text, ids) {
     if (myTurn !== turnId) return;
     previous = speakAs(c, reply.text, msg.status);
   }
-  if (previous) await previous;
+  const last = previous ? await previous : 'ended';
+  // 連續對談：最後一位說完後自動開始聽下一個問題，對象與這一題相同
+  if (last === 'ended' && myTurn === turnId && $('handsFree').checked) {
+    startListening(ids, ids.length > 1 ? $('micAll') : $(`mic-${ids[0]}`));
+  }
 }
 
 function stopAll() {
@@ -634,7 +656,7 @@ function stopMonitor() {
 $('micAll').addEventListener('click', () => toggleListening(targetIds($('target').value), $('micAll')));
 
 function enableMic() {
-  for (const id of ['micAll', 'pauseWrap', 'voiceStopWrap', 'micNotice']) $(id).hidden = false;
+  for (const id of ['micAll', 'handsFreeWrap', 'pauseWrap', 'voiceStopWrap', 'micNotice']) $(id).hidden = false;
   for (const c of activeChars()) {
     const b = $(`mic-${c.id}`);
     b.disabled = false;
