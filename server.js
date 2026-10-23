@@ -16,6 +16,8 @@ try {
 }
 
 const PORT = Number(process.env.PORT || 3000);
+// 監聽位址；部署到伺服器、前面有 Apache 時設成 127.0.0.1，外部只能經由 Apache 連入
+const HOST = process.env.HOST || undefined;
 // 手機等其他裝置用麥克風必須走 HTTPS（瀏覽器規定）；預設另開 HTTPS 埠，使用自動產生的自簽憑證
 const HTTPS_ENABLED = process.env.HTTPS !== 'false';
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 3443);
@@ -705,7 +707,7 @@ if (HTTPS_ENABLED) {
   }
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(`http://localhost:${PORT}`);
   console.log(`對話模型：${CLAUDE_MODEL}（effort: ${CLAUDE_EFFORT}）`);
   console.log(`多人對談：http://localhost:${PORT}/panel.html${DEMO_CHARACTERS ? '（含虛構測試角色）' : ''}`);
