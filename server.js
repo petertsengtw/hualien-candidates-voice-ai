@@ -141,6 +141,43 @@ const WEB_SEARCH_TOOL = {
 };
 const MAX_CONTINUATIONS = 3;
 
+// 每日提問次數限制，控制 Claude 費用。每呼叫一次 Claude 算一次（多人對談問全體時三位各算一次）。
+// 依台灣時間每天午夜歸零；次數存在記憶體，伺服器重新啟動也會歸零。設為 0 代表不限制。
+const DAILY_LIMIT_PER_IP = Number(process.env.DAILY_LIMIT_PER_IP || 60);
+const DAILY_LIMIT_TOTAL = Number(process.env.DAILY_LIMIT_TOTAL || 300);
+const usage = { day: '', total: 0, byIp: new Map() };
+
+function taipeiDay() {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+}
+
+// 經過 Apache 轉送時，真正的來源 IP 是 X-Forwarded-For 的最後一個（前面的可能是使用者自己偽造的）
+function clientIp(req) {
+  const remote = req.socket.remoteAddress || '';
+  const forwarded = req.headers['x-forwarded-for'];
+  const fromProxy = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote);
+  return forwarded && fromProxy ? forwarded.split(',').at(-1).trim() : remote;
+}
+
+// 還有額度就扣一次並回傳 null；用完時回傳要顯示給使用者的訊息
+function takeQuota(req) {
+  const day = taipeiDay();
+  if (usage.day !== day) Object.assign(usage, { day, total: 0, byIp: new Map() });
+  const ip = clientIp(req);
+  const used = usage.byIp.get(ip) || 0;
+  if (DAILY_LIMIT_TOTAL > 0 && usage.total >= DAILY_LIMIT_TOTAL) {
+    console.warn(`[${day}] 今日總提問次數已達上限 ${DAILY_LIMIT_TOTAL}`);
+    return '今天所有人的提問次數加起來已達上限，請明天再試。';
+  }
+  if (DAILY_LIMIT_PER_IP > 0 && used >= DAILY_LIMIT_PER_IP) {
+    console.warn(`[${day}] ${ip} 已達每日提問上限 ${DAILY_LIMIT_PER_IP}`);
+    return `你今天的提問次數已達上限（每天 ${DAILY_LIMIT_PER_IP} 次），請明天再試。`;
+  }
+  usage.byIp.set(ip, used + 1);
+  usage.total++;
+  return null;
+}
+
 const PUBLIC_DIR = join(import.meta.dirname, 'public');
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -422,8 +459,26 @@ function collectSources(blocks, knowledge) {
 // 語音合成超過這個秒數就在終端機記一筆，方便判斷是不是 MiniMax 那邊變慢
 const SLOW_TTS_SECONDS = 5;
 
+// 合成過的語音暫存在記憶體：每段對話開頭固定的 AI 身分說明可以馬上播出，重播也不必重新合成、不再計費
+const TTS_CACHE_MAX = 100;
+const ttsCache = new Map();
+
 async function tts(text, voiceId) {
   const spoken = text.replace(/[*#`>_~\[\]]/g, '').trim();
+  const key = `${voiceId}\n${spoken.replace(/\s+/g, '')}`;
+  if (ttsCache.has(key)) {
+    const audio = ttsCache.get(key);
+    ttsCache.delete(key); // 移到最後，最久沒用到的會先被清掉
+    ttsCache.set(key, audio);
+    return audio;
+  }
+  const audio = await synthesize(spoken, voiceId);
+  ttsCache.set(key, audio);
+  if (ttsCache.size > TTS_CACHE_MAX) ttsCache.delete(ttsCache.keys().next().value);
+  return audio;
+}
+
+async function synthesize(spoken, voiceId) {
   const startedAt = Date.now();
   let res;
   try {
@@ -602,6 +657,8 @@ const server = createServer(async (req, res) => {
         ? body.transcript
         : (body.messages || []).map((m) => ({ role: m.role, characterId: character.id, text: m.content }));
       if (!transcript.length) return send(res, 400, { error: '對話內容不可為空' });
+      const overLimit = takeQuota(req);
+      if (overLimit) return send(res, 429, { error: overLimit });
 
       if (url.pathname === '/api/chat') {
         const { text, sources } = await chat(character, transcript);
@@ -642,7 +699,10 @@ const server = createServer(async (req, res) => {
       if (file.includes('..')) return send(res, 400, { error: 'bad path' });
       try {
         const content = await readFile(join(PUBLIC_DIR, file));
-        res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
+        // 網頁與程式用 no-cache：瀏覽器每次都向伺服器確認，更新後重新整理就會生效。
+        // 圖片很少改、頭像動畫會反覆切換，讓瀏覽器快取一小時
+        const cache = file.startsWith('images/') ? 'max-age=3600' : 'no-cache';
+        res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control': cache });
         return res.end(content);
       } catch {
         return send(res, 404, { error: 'not found' });
@@ -655,6 +715,12 @@ const server = createServer(async (req, res) => {
     send(res, 500, { error: err.message });
   }
 });
+
+// 啟動時先合成各角色的 AI 身分說明，第一句就能馬上播出
+for (const c of CHARACTERS) {
+  if (!c.enabled || !c.voiceId || !MINIMAX_API_KEY || (c.kind === 'demo' && !DEMO_CHARACTERS)) continue;
+  tts(disclaimer(c), c.voiceId).catch((err) => console.warn(`${c.name} 身分說明語音預先合成失敗：${err.message}`));
+}
 
 if (await sttReady()) console.log(`語音辨識：沿用已在執行的服務 ${STT_URL}`);
 else startStt();
@@ -719,5 +785,6 @@ server.listen(PORT, HOST, () => {
   }
   if (!ANTHROPIC_API_KEY) console.warn('警告：尚未設定 ANTHROPIC_API_KEY，無法對話');
   if (!MINIMAX_API_KEY) console.warn('警告：尚未設定 MINIMAX_API_KEY，無法產生語音');
+  console.log(`每日提問上限：每個 IP ${DAILY_LIMIT_PER_IP || '不限'} 次，全部合計 ${DAILY_LIMIT_TOTAL || '不限'} 次`);
   if (TTS_TEST_MODE) console.warn('注意：朗讀測試模式已開啟，私人試用前請關閉');
 });

@@ -90,7 +90,7 @@ sequenceDiagram
 | --- | --- |
 | 對話模型 | Claude（預設 `claude-opus-5`），透過 `@anthropic-ai/sdk` |
 | 語音合成與聲音複製 | MiniMax（國際版）`speech-2.8-hd` |
-| 語音辨識 | 本機 Whisper：Mac 用 mlx-whisper（`whisper-large-v3-turbo`），Linux 伺服器用 faster-whisper（`small`，只用 CPU） |
+| 語音辨識 | 本機 Whisper：Mac 用 mlx-whisper（`whisper-large-v3-turbo`），Linux 伺服器用 faster-whisper（`base`，只用 CPU） |
 
 ## 環境需求
 
@@ -149,10 +149,10 @@ mlx-whisper 只能在 Apple 晶片上執行。Linux 伺服器改用 faster-whisp
 ```bash
 python3 -m venv stt-venv
 stt-venv/bin/pip install -r stt/requirements-linux.txt   # 另需 ffmpeg
-STT_BACKEND=faster-whisper STT_MODEL=small stt-venv/bin/python stt/stt_server.py
+STT_BACKEND=faster-whisper STT_MODEL=base stt-venv/bin/python stt/stt_server.py
 ```
 
-- `STT_MODEL` 可用 `base`（較快、較不準）或 `small`。1 顆 CPU 上，7 秒的提問 `base` 約 2 秒、`small` 約 5.5 秒辨識完。
+- `STT_MODEL` 可用 `base`（較快，目前使用）或 `small`（較準）。1 顆 CPU 上，7 秒的提問 `base` 約 2 秒、`small` 約 5.5 秒辨識完。
 - 第一次啟動會下載模型（`small` 約 500 MB）。
 
 ## 設定（.env）
@@ -174,6 +174,8 @@ STT_BACKEND=faster-whisper STT_MODEL=small stt-venv/bin/python stt/stt_server.py
 | `HTTPS_PORT` | HTTPS 埠號 | `3443` |
 | `STT_AUTOSTART` | 是否隨伺服器自動啟動本機語音辨識 | `true` |
 | `STT_URL` | 語音辨識服務位址 | `http://127.0.0.1:3010` |
+| `DAILY_LIMIT_PER_IP` | 每個 IP 每天可呼叫 Claude 的次數（多人對談問全體算三次）；`0` 不限制 | `60` |
+| `DAILY_LIMIT_TOTAL` | 所有人每天合計的上限；`0` 不限制。次數存在記憶體，重新啟動會歸零 | `300` |
 | `HOST` | 網頁伺服器監聽位址；部署到伺服器、前面有 Apache 時設成 `127.0.0.1` | 所有介面 |
 | `WEB_SEARCH_TOOL` | 網路搜尋工具版本；預設的基本版會附逐句引用 | `web_search_20250305` |
 | `TTS_TEST_MODE` | 開發用：顯示「朗讀測試」開關，可讓角色聲音直接朗讀任意文字。**私人試用前必須設為 `false`** | `false` |

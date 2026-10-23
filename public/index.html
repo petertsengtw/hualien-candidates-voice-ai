@@ -111,8 +111,9 @@
       <label id="handsFreeWrap" class="sub" hidden style="white-space:nowrap"><input type="checkbox" id="handsFree"> 連續對談</label>
       <label id="pauseWrap" class="sub" hidden style="white-space:nowrap">停頓
         <select id="pauseMs">
+          <option value="1200" selected>1.2 秒</option>
           <option value="1500">1.5 秒</option>
-          <option value="2500" selected>2.5 秒</option>
+          <option value="2500">2.5 秒</option>
           <option value="4000">4 秒</option>
         </select>
         算說完</label>
@@ -192,24 +193,16 @@ let playback = 0;
 function stopAudio() {
   playback++;
   stopMonitor();
-  if (audio) { audio.pause(); audio = null; }
+  if (audio) { audio.stop(); audio = null; }
   $('stop').disabled = true;
 }
 
 // 播放單段音訊，回傳 'ended'（播完）、'stopped'（被停止）或 'blocked'（瀏覽器不允許自動播放）
 function playOne(src) {
-  // 用整頁共用、點擊時已解鎖的播放器，手機上連續對談時才能自動播放
-  const a = SharedPlayer.el;
-  a.onended = null;
-  a.onpause = null;
-  SharedPlayer.load(src);
-  audio = a;
-  const anim = TalkingAvatar.start(a, $('avatar'), character); // 頭像顯示說話中的樣子
-  return new Promise((resolve) => {
-    a.onended = () => resolve('ended');
-    a.onpause = () => { if (!a.ended) resolve('stopped'); };
-    a.play().catch(() => resolve('blocked'));
-  }).finally(() => anim.then((stop) => stop())); // 不等動畫，播放結束就繼續
+  const playing = SharedPlayer.play(src);
+  audio = playing;
+  const stopAnim = TalkingAvatar.start($('avatar'), character, SharedPlayer.analyser); // 頭像顯示說話中的樣子
+  return playing.done.finally(stopAnim);
 }
 
 // 把回答切成句子分段合成：第一段較短，先合成先播；播放時同步合成下一段，縮短等待
@@ -434,7 +427,7 @@ let monitorTimer = null; // 角色說話時偵測使用者開口
 
 // 停頓多久才算說完（毫秒）
 function pauseMs() {
-  return Number($('pauseMs').value) || 2500;
+  return Number($('pauseMs').value) || 1200;
 }
 
 async function ensureMic() {
