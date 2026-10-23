@@ -1,0 +1,4 @@
+# Linux 伺服器（只用 CPU）的語音辨識套件，搭配 STT_BACKEND=faster-whisper
+faster-whisper==1.2.1
+numpy==2.5.4
+ctranslate2==4.8.3

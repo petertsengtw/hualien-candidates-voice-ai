@@ -1,8 +1,11 @@
-"""本機語音辨識服務：啟動時載入一次 Whisper 模型（mlx-whisper，Apple 晶片），
-提供 HTTP 介面給 server.js 呼叫。只監聽 127.0.0.1，錄音不會離開這台電腦。
+"""本機語音辨識服務：啟動時載入一次 Whisper 模型，提供 HTTP 介面給 server.js 呼叫。
+只監聽 127.0.0.1，錄音不會送到外部的語音辨識服務。
 
-啟動方式（通常由 server.js 自動啟動）：
+兩種引擎（STT_BACKEND）：
+- mlx：mlx-whisper，Apple 晶片的 Mac（預設，在 Mac 上由 server.js 自動啟動）
     uv run --offline --no-project --python 3.11 --with-requirements stt/requirements.txt python stt/stt_server.py
+- faster-whisper：一般 Linux 伺服器，只用 CPU（套件見 stt/requirements-linux.txt）
+    STT_BACKEND=faster-whisper python stt/stt_server.py
 """
 
 import json
@@ -10,13 +13,17 @@ import os
 import subprocess
 import sys
 import tempfile
+import wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import mlx_whisper
 import numpy as np
 
 PORT = int(os.environ.get("STT_PORT", "3010"))
-MODEL = os.environ.get("STT_MODEL", "mlx-community/whisper-large-v3-turbo")
+BACKEND = os.environ.get("STT_BACKEND", "mlx")
+DEFAULT_MODELS = {"mlx": "mlx-community/whisper-large-v3-turbo", "faster-whisper": "small"}
+if BACKEND not in DEFAULT_MODELS:
+    sys.exit(f"STT_BACKEND 只能是 {' / '.join(DEFAULT_MODELS)}，收到：{BACKEND}")
+MODEL = os.environ.get("STT_MODEL", DEFAULT_MODELS[BACKEND])
 LANGUAGE = os.environ.get("STT_LANGUAGE", "zh")
 # 提示詞：讓模型偏向繁體中文，並認得花蓮的人名、地名與常用詞
 INITIAL_PROMPT = os.environ.get(
@@ -47,23 +54,71 @@ def to_wav(data: bytes) -> str:
     return wav
 
 
-def transcribe(data: bytes) -> str:
-    wav = to_wav(data)
-    try:
+if BACKEND == "mlx":
+    import mlx_whisper
+
+    def load_model() -> None:
+        # 先跑一次一秒的靜音，把模型載入記憶體，之後每次辨識就不用等載入
+        mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo=MODEL, language=LANGUAGE, verbose=None)
+
+    def run_whisper(audio) -> list[dict]:
         result = mlx_whisper.transcribe(
-            wav,
+            audio,
             path_or_hf_repo=MODEL,
             language=LANGUAGE,
             initial_prompt=INITIAL_PROMPT,
             condition_on_previous_text=False,
             verbose=None,
         )
+        return result.get("segments", [])
+
+else:
+    from faster_whisper import WhisperModel
+
+    whisper_model = None
+
+    def load_model() -> None:
+        global whisper_model
+        # int8 在 CPU 上最快、最省記憶體；執行緒數預設用全部 CPU
+        threads = int(os.environ.get("STT_THREADS", "0")) or (os.cpu_count() or 1)
+        whisper_model = WhisperModel(MODEL, device="cpu", compute_type="int8", cpu_threads=threads)
+
+    def read_wav(path: str) -> np.ndarray:
+        # 直接讀 ffmpeg 轉好的 16kHz 單聲道 16-bit wav；不經過 faster-whisper 內建的 PyAV 解碼
+        with wave.open(path, "rb") as w:
+            pcm = w.readframes(w.getnframes())
+        return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+
+    def run_whisper(audio) -> list[dict]:
+        segments, _ = whisper_model.transcribe(
+            read_wav(audio),
+            language=LANGUAGE,
+            initial_prompt=INITIAL_PROMPT,
+            condition_on_previous_text=False,
+            beam_size=int(os.environ.get("STT_BEAM_SIZE", "1")),
+            vad_filter=True,  # 先切掉沒人說話的部分，CPU 上快很多，也比較不會幻聽
+        )
+        return [
+            {
+                "text": s.text,
+                "no_speech_prob": s.no_speech_prob,
+                "compression_ratio": s.compression_ratio,
+                "avg_logprob": s.avg_logprob,
+            }
+            for s in segments
+        ]
+
+
+def transcribe(data: bytes) -> str:
+    wav = to_wav(data)
+    try:
+        raw_segments = run_whisper(wav)
     finally:
         os.unlink(wav)
     # 去掉多半是雜訊或幻聽的片段：像是沒人說話、文字大量重複、或模型自己都沒把握
     segments = [
         s
-        for s in result.get("segments", [])
+        for s in raw_segments
         if s.get("no_speech_prob", 0) < 0.6
         and s.get("compression_ratio", 0) < 2.4
         and s.get("avg_logprob", 0) > -1.0
@@ -108,9 +163,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print(f"語音辨識：載入模型 {MODEL}…", flush=True)
-    # 先跑一次一秒的靜音，把模型載入記憶體，之後每次辨識就不用等載入
-    mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo=MODEL, language=LANGUAGE, verbose=None)
+    print(f"語音辨識：載入模型 {MODEL}（{BACKEND}）…", flush=True)
+    load_model()
     server = HTTPServer(("127.0.0.1", PORT), Handler)
     print(f"語音辨識：已就緒 http://127.0.0.1:{PORT}", flush=True)
     try:

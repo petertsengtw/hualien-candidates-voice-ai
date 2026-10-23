@@ -90,7 +90,7 @@ sequenceDiagram
 | --- | --- |
 | 對話模型 | Claude（預設 `claude-opus-5`），透過 `@anthropic-ai/sdk` |
 | 語音合成與聲音複製 | MiniMax（國際版）`speech-2.8-hd` |
-| 語音辨識 | 本機 mlx-whisper，模型 `whisper-large-v3-turbo` |
+| 語音辨識 | 本機 Whisper：Mac 用 mlx-whisper（`whisper-large-v3-turbo`），Linux 伺服器用 faster-whisper（`small`，只用 CPU） |
 
 ## 環境需求
 
@@ -142,6 +142,19 @@ npm start
 - 第一次啟動語音辨識時，如果本機沒有快取的套件，會自動下載（約 200 MB 以上），需要幾分鐘。
 - 修改 `server.js`、`.env`、`characters.json` 或 `knowledge/` 之後，要重新啟動才會生效；只改 `public/` 裡的網頁時，重新整理瀏覽器即可。
 
+### 在 Linux 伺服器上使用麥克風
+
+mlx-whisper 只能在 Apple 晶片上執行。Linux 伺服器改用 faster-whisper，另外啟動語音辨識服務，並在 `.env` 設 `STT_AUTOSTART=false`：
+
+```bash
+python3 -m venv stt-venv
+stt-venv/bin/pip install -r stt/requirements-linux.txt   # 另需 ffmpeg
+STT_BACKEND=faster-whisper STT_MODEL=small stt-venv/bin/python stt/stt_server.py
+```
+
+- `STT_MODEL` 可用 `base`（較快、較不準）或 `small`。1 顆 CPU 上，7 秒的提問 `base` 約 2 秒、`small` 約 5.5 秒辨識完。
+- 第一次啟動會下載模型（`small` 約 500 MB）。
+
 ## 設定（.env）
 
 | 變數 | 說明 | 預設 |
@@ -161,6 +174,7 @@ npm start
 | `HTTPS_PORT` | HTTPS 埠號 | `3443` |
 | `STT_AUTOSTART` | 是否隨伺服器自動啟動本機語音辨識 | `true` |
 | `STT_URL` | 語音辨識服務位址 | `http://127.0.0.1:3010` |
+| `HOST` | 網頁伺服器監聽位址；部署到伺服器、前面有 Apache 時設成 `127.0.0.1` | 所有介面 |
 | `WEB_SEARCH_TOOL` | 網路搜尋工具版本；預設的基本版會附逐句引用 | `web_search_20250305` |
 | `TTS_TEST_MODE` | 開發用：顯示「朗讀測試」開關，可讓角色聲音直接朗讀任意文字。**私人試用前必須設為 `false`** | `false` |
 | `DEMO_CHARACTERS` | 開發用：多人對談頁以虛構測試角色代替未啟用的參選人 | `false` |
