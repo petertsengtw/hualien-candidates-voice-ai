@@ -3,6 +3,8 @@
 const TalkingAvatar = (() => {
   let ctx = null;
   const analysers = new WeakMap(); // 同一個 <audio> 只能接上一次，接過就重複使用
+  const gains = new WeakMap(); // 每個 <audio> 的音量節點，用來在換句時淡入，避免「啪」一聲
+  const FADE_SECONDS = 0.03; // 每句開頭約有 0.2 秒靜音，30 毫秒的淡入不會吃掉字
 
   // 在使用者點擊時呼叫：手機瀏覽器只允許在點擊當下啟動音訊處理
   function unlock() {
@@ -24,13 +26,35 @@ const TalkingAvatar = (() => {
       if (ctx.state !== 'running') return null;
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
-      ctx.createMediaElementSource(audioEl).connect(analyser);
+      const gain = ctx.createGain();
+      ctx.createMediaElementSource(audioEl).connect(gain);
+      gain.connect(analyser);
       analyser.connect(ctx.destination);
       analysers.set(audioEl, analyser);
+      gains.set(audioEl, gain);
       return analyser;
     } catch {
       return null;
     }
+  }
+
+  // 換下一句之前先把音量歸零：iPhone Safari 在聲音突然中斷或開始的地方會發出「啪」一聲
+  function mute(audioEl) {
+    const gain = gains.get(audioEl);
+    if (!gain) return;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+  }
+
+  // 開始播放時從靜音很快淡入
+  function fadeIn(audioEl) {
+    const gain = gains.get(audioEl);
+    if (!gain) return;
+    if (ctx.state !== 'running') ctx.resume().catch(() => {});
+    const t = ctx.currentTime;
+    gain.gain.cancelScheduledValues(t);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(1, t + FADE_SECONDS);
   }
 
   function preload(url) {
@@ -90,7 +114,7 @@ const TalkingAvatar = (() => {
     };
   }
 
-  return { start, unlock };
+  return { start, unlock, analyserFor, mute, fadeIn };
 })();
 
 // 共用的播放器：手機（特別是 iPhone）只允許「點擊過的」<audio> 之後自動播放，
@@ -104,6 +128,8 @@ const SharedPlayer = (() => {
 
   function unlock() {
     TalkingAvatar.unlock();
+    // 點擊當下就把播放器接上音量節點，第一句也能淡入，也不會在播放中途改接線路而爆音
+    TalkingAvatar.analyserFor(el);
     if (unlocked) return;
     unlocked = true;
     el.src = SILENCE;
@@ -112,5 +138,12 @@ const SharedPlayer = (() => {
   for (const type of ['pointerdown', 'keydown', 'touchend']) {
     document.addEventListener(type, unlock, { capture: true, passive: true });
   }
-  return { el, unlock };
+  el.addEventListener('playing', () => TalkingAvatar.fadeIn(el));
+
+  // 換成下一段音訊：先靜音再換，開始播放時（playing）再淡入
+  function load(src) {
+    TalkingAvatar.mute(el);
+    el.src = src;
+  }
+  return { el, unlock, load };
 })();

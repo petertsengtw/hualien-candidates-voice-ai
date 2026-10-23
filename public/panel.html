@@ -367,7 +367,7 @@ function playOne(src, c) {
   const a = SharedPlayer.el;
   a.onended = null;
   a.onpause = null;
-  a.src = src;
+  SharedPlayer.load(src);
   audio = a;
   const anim = TalkingAvatar.start(a, $(`card-${c.id}`)?.querySelector('.avatar'), c); // 卡片上的頭像顯示說話中的樣子
   return new Promise((resolve) => {
